@@ -3,7 +3,7 @@ const PAGE = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Project 04 — Performance &amp; Analysis</title>
+<title>Project 08 — Performance &amp; Analysis</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <style>
@@ -352,7 +352,7 @@ const PAGE = `<!DOCTYPE html>
 <body>
 <div class="hero">
   <div class="wrap">
-    <h1>Project 04 &mdash; Performance &amp; Analysis</h1>
+    <h1>Project 08 &mdash; Performance &amp; Analysis</h1>
     <div class="updated" id="updated-badge"><span class="dot"></span> Loading&hellip;</div>
     <div class="agent-scope-badge" id="agent-scope-badge" style="display:none"></div>
   </div>
@@ -4083,7 +4083,7 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in - Project 04</title>
+<title>Sign in - Project 08</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f3f4f6; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
   .box { background: #fff; padding: 32px; border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); width: 320px; }
@@ -4096,7 +4096,7 @@ const LOGIN_PAGE = `<!DOCTYPE html>
 </head>
 <body>
   <div class="box">
-    <h1>Project 04 &mdash; Performance &amp; Analysis</h1>
+    <h1>Project 08 &mdash; Performance &amp; Analysis</h1>
     <form method="POST" action="/login">
       __ERROR__
       <input type="password" name="password" placeholder="Password" autofocus required>
