@@ -1,0 +1,53 @@
+name: Resync user balances (one-off, no API re-fetch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnose_user:
+        description: "User ID to print a full wallet-ledger diagnostic for (optional)"
+        required: false
+        default: ""
+      apply:
+        description: "Set to 'true' to actually write the resynced balances"
+        required: false
+        default: "false"
+
+concurrency:
+  group: db-ingest
+  cancel-in-progress: false
+
+jobs:
+  resync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Resync balances
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.diagnose_user }}" ]; then ARGS="$ARGS --diagnose-user ${{ inputs.diagnose_user }}"; fi
+          if [ "${{ inputs.apply }}" = "true" ]; then ARGS="$ARGS --apply"; fi
+          python3 resync_user_balances.py $ARGS
+
+      - name: Refresh deposit report
+        if: ${{ inputs.apply == 'true' }}
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 build_deposit_report.py

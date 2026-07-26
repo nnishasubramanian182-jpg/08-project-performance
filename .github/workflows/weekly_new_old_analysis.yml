@@ -1,0 +1,30 @@
+name: Weekly new vs old user analysis (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "YYYY-MM-DD start date"
+        required: true
+      end:
+        description: "YYYY-MM-DD end date"
+        required: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Run analysis
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 weekly_new_old_analysis.py --start "${{ inputs.start }}" --end "${{ inputs.end }}"

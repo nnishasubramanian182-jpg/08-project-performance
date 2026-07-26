@@ -1,0 +1,52 @@
+name: Add balance adjustment (permanent, one-off correction)
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: "User ID to adjust"
+        required: true
+      amount:
+        description: "Signed amount; negative to deduct, positive to add"
+        required: true
+      reason:
+        description: "Reason (stored in balance_adjustments.last_reason)"
+        required: false
+        default: "Manual adjustment"
+
+concurrency:
+  group: db-ingest
+  cancel-in-progress: false
+
+jobs:
+  adjust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Add balance adjustment
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 add_balance_adjustment.py --user-id "${{ inputs.user_id }}" --amount "${{ inputs.amount }}" \
+            --reason "${{ inputs.reason }}"
+
+      - name: Refresh deposit report
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 build_deposit_report.py

@@ -1,0 +1,58 @@
+name: Redownload wallet day(s) + resync balances
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Comma-separated YYYY-MM-DD day(s) to re-fetch, e.g. 2026-07-04,2026-07-05"
+        required: true
+
+concurrency:
+  group: db-ingest
+  cancel-in-progress: false
+
+jobs:
+  redownload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Redownload each day's wallet export
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          IFS=',' read -ra DATES <<< "${{ inputs.dates }}"
+          for d in "${DATES[@]}"; do
+            echo "=== Redownloading $d ==="
+            python3 redownload_wallet_day.py --date "$d"
+          done
+
+      - name: Resync user_balance from the now-more-complete ledger
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 resync_user_balances.py --diagnose-user 1761219 --apply
+
+      - name: Refresh deposit report
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python3 build_deposit_report.py
