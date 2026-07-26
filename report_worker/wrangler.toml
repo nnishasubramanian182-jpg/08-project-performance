@@ -1,7 +1,0 @@
-name = "08-project-performance"
-main = "src/index.js"
-compatibility_date = "2025-01-01"
-
-[[r2_buckets]]
-binding = "USERLIST_BUCKET"
-bucket_name = "08-project-userlist-db"
