@@ -558,7 +558,7 @@ def withdrawal_backlog(withdrawal_full_records, now, status, bucket_fn, bucket_l
 # from level N-1 to level N. Kept in sync with api_pull_ingest.py's copy, which
 # uses it to (re)compute vip_level in master_userlist.db on every pull.
 VIP_THRESHOLDS = {
-    0: 0, 1: 200, 2: 1500, 3: 9600, 4: 19600, 5: 95600, 6: 295600, 7: 795600,
+    0: 0, 1: 100, 2: 600, 3: 5600, 4: 15600, 5: 95600, 6: 295600, 7: 795600,
     8: 1795600, 9: 3795600, 10: 8795600, 11: 16795600, 12: 28795600,
     13: 44795600, 14: 69795600, 15: 119795600,
 }

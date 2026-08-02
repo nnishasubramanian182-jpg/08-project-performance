@@ -48,7 +48,7 @@ WALLET_STATE_KEY = "reports/wallet_fetch_state.json"
 # platform's own VIP table. VIP level is purely a function of total deposit --
 # never withdrawal history. Kept in sync with build_deposit_report.py's copy.
 VIP_THRESHOLDS = {
-    0: 0, 1: 200, 2: 1500, 3: 9600, 4: 19600, 5: 95600, 6: 295600, 7: 795600,
+    0: 0, 1: 100, 2: 600, 3: 5600, 4: 15600, 5: 95600, 6: 295600, 7: 795600,
     8: 1795600, 9: 3795600, 10: 8795600, 11: 16795600, 12: 28795600,
     13: 44795600, 14: 69795600, 15: 119795600,
 }
