@@ -90,10 +90,13 @@ def main():
         uid: tr for uid, tr in mconn.execute("SELECT user_id, total_recharge FROM users").fetchall()
         if uid not in banned_ids
     }
+    # Agent assignments live in their own R2 object now, not a
+    # master_userlist.db table -- see reassign_agent.py's docstring.
     agent_by_user = {}
     try:
-        agent_by_user = dict(mconn.execute("SELECT user_id, agent_name FROM agent_assignments").fetchall())
-    except sqlite3.OperationalError:
+        agent_obj = s3.get_object(Bucket=bucket, Key="config/agent_assignments.json")
+        agent_by_user = {int(uid): name for uid, name in json.loads(agent_obj["Body"].read()).items()}
+    except Exception:
         pass
     mconn.close()
 

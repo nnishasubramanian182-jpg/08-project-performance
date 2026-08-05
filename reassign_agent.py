@@ -5,25 +5,37 @@ widget or the "Bulk Reassign Agent" (paste User IDs) widget on the
 dashboard's Search User page (via the 08-project-upload worker's
 /reassign-agent endpoint).
 
-Downloads master_userlist.db from R2, upserts (or deletes, for un-assign)
-one row per user_id in agent_assignments, and re-uploads -- the same
-read-modify-write pattern ci_ingest.py uses for bulk file ingests, just
-scoped to a small explicit ID list instead of a whole spreadsheet.
+Agent assignments live in their OWN small R2 object
+(config/agent_assignments.json -- {user_id_str: agent_name}), NOT inside
+master_userlist.db. They used to be a table in master_userlist.db, which
+meant every reassignment had to re-upload the ENTIRE 60MB+ database just to
+change a couple of rows -- by far the slowest part of this script. Moving
+the mapping to its own tiny JSON file removes that upload entirely (this
+script no longer writes master_userlist.db at all, only reads it, to check
+the user_id actually exists).
+
+master_userlist.db is still downloaded read-only here because
+build_deposit_report.py (run right after this script, in the same job
+workspace) expects it already present locally and doesn't download it
+itself.
 
 Usage: python3 reassign_agent.py --user-ids 12345 --agent "Sathya (WFH)"
        python3 reassign_agent.py --user-ids 12345,67890,111 --agent "Sathya (WFH)"
        python3 reassign_agent.py --user-ids 12345 --agent ""   (un-assign)
 """
 import argparse
+import json
 import os
 import sqlite3
 import sys
 
 import boto3
+from botocore.exceptions import ClientError
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 MASTER_DB = os.path.join(BASE, "master_userlist.db")
 DAILY_DB = os.path.join(BASE, "daily_records.db")
+AGENT_ASSIGNMENTS_KEY = "config/agent_assignments.json"
 
 
 def r2_client():
@@ -34,6 +46,21 @@ def r2_client():
         aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
         region_name="auto",
     )
+
+
+def load_agent_assignments(s3, bucket):
+    """Only a genuinely-missing object (first run ever, before this file has
+    been created) defaults to an empty mapping. Any other error (network,
+    auth, etc.) must fail loudly -- silently treating a transient failure as
+    "no assignments yet" would upload a near-empty mapping over the real
+    one, wiping out every existing assignment."""
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=AGENT_ASSIGNMENTS_KEY)
+        return json.loads(obj["Body"].read())
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return {}
+        raise
 
 
 def main():
@@ -52,36 +79,39 @@ def main():
 
     try:
         s3.download_file(bucket, "master_userlist.db", MASTER_DB)
-        # Not modified here, but build_deposit_report.py (run right after this
-        # script, in the same job workspace) needs it present locally to
-        # refresh the live report -- same download-both-DBs pattern ci_ingest.py
-        # uses, just for a script that only writes to one of them.
+        # build_deposit_report.py needs this present locally too -- see
+        # module docstring.
         s3.download_file(bucket, "daily_records.db", DAILY_DB)
     except Exception as e:
         print(f"FATAL: could not download DBs from R2: {e}", file=sys.stderr)
         sys.exit(1)
 
     conn = sqlite3.connect(MASTER_DB)
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS agent_assignments (user_id INTEGER PRIMARY KEY, agent_name TEXT)")
+    existing_ids = {
+        row[0] for row in conn.execute(
+            f"SELECT user_id FROM users WHERE user_id IN ({','.join('?' * len(user_ids))})",
+            user_ids,
+        ).fetchall()
+    }
+    conn.close()
+
+    try:
+        mapping = load_agent_assignments(s3, bucket)
+    except Exception as e:
+        print(f"FATAL: could not load {AGENT_ASSIGNMENTS_KEY} from R2: {e}", file=sys.stderr)
+        sys.exit(1)
 
     agent = args.agent.strip()
     assigned, missing = [], []
     for user_id in user_ids:
-        exists = cur.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        if not exists:
+        if user_id not in existing_ids:
             missing.append(user_id)
             continue
         if agent:
-            cur.execute(
-                "INSERT OR REPLACE INTO agent_assignments (user_id, agent_name) VALUES (?, ?)",
-                (user_id, agent),
-            )
+            mapping[str(user_id)] = agent
         else:
-            cur.execute("DELETE FROM agent_assignments WHERE user_id = ?", (user_id,))
+            mapping.pop(str(user_id), None)
         assigned.append(user_id)
-    conn.commit()
-    conn.close()
 
     if missing:
         print(f"Skipped {len(missing)} user_id(s) not found in users table: {missing}", file=sys.stderr)
@@ -91,8 +121,8 @@ def main():
         print("FATAL: no valid user IDs to reassign", file=sys.stderr)
         sys.exit(1)
 
-    s3.upload_file(MASTER_DB, bucket, "master_userlist.db")
-    print("Uploaded updated master_userlist.db")
+    s3.put_object(Bucket=bucket, Key=AGENT_ASSIGNMENTS_KEY, Body=json.dumps(mapping), ContentType="application/json")
+    print(f"Uploaded updated {AGENT_ASSIGNMENTS_KEY} ({len(mapping)} total assignments)")
 
 
 if __name__ == "__main__":

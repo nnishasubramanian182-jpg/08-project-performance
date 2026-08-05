@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import boto3
+from botocore.exceptions import ClientError
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
@@ -71,6 +72,27 @@ def main():
     download_with_retry(s3, bucket, args.key, local_incoming)
     print(f"Downloaded incoming file {args.key} -> {local_incoming}")
 
+    # Agent assignments live in their own small R2 object, not a
+    # master_userlist.db table (see ingest_update.py's load_agent_assignments
+    # docstring) -- download the current copy to the same local path
+    # ingest_update.py reads/writes, so an agents/bulk_reassign upload edits
+    # the real current mapping instead of starting from empty.
+    agent_assignments_key = "config/agent_assignments.json"
+    local_agent_assignments = os.path.join(BASE, "agent_assignments.json")
+    if args.file_type in ("agents", "bulk_reassign"):
+        try:
+            download_with_retry(s3, bucket, agent_assignments_key, local_agent_assignments)
+            print(f"Downloaded existing {agent_assignments_key} from R2")
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                print(f"No existing {agent_assignments_key} in R2 yet -- starting from empty")
+            else:
+                # Any other error (network, auth, etc.) must fail loudly --
+                # silently starting from empty here would let the upload at
+                # the end of this run overwrite every existing assignment.
+                print(f"FATAL: could not download {agent_assignments_key} from R2: {e}", file=sys.stderr)
+                sys.exit(1)
+
     # Run the ingest (this also purges >33 days and uploads both DBs to R2).
     # Uses subprocess.run with check=True so a failure here actually fails this
     # job -- os.system() would silently swallow a non-zero exit code and let the
@@ -88,6 +110,10 @@ def main():
         [sys.executable, os.path.join(BASE, "ingest_update.py"), cmd_flag, local_incoming],
         check=True,
     )
+
+    if args.file_type in ("agents", "bulk_reassign"):
+        s3.upload_file(local_agent_assignments, bucket, agent_assignments_key)
+        print(f"Uploaded updated {agent_assignments_key}")
 
     # Clean up the incoming file from R2 now that it's been processed
     s3.delete_object(Bucket=bucket, Key=args.key)

@@ -13,6 +13,7 @@ Records tables are purged to a rolling 33-day window (by create_time), and both
 DBs are re-uploaded to R2 automatically unless --no-upload is passed.
 """
 import argparse
+import json
 import os
 import re
 import sqlite3
@@ -22,9 +23,26 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 MASTER_DB = os.path.join(BASE, "master_userlist.db")
 DAILY_DB = os.path.join(BASE, "daily_records.db")
+AGENT_ASSIGNMENTS_PATH = os.path.join(BASE, "agent_assignments.json")
 RETENTION_DAYS = 33
 
 import openpyxl
+
+
+def load_agent_assignments():
+    """{user_id_str: agent_name} -- see reassign_agent.py's docstring for
+    why this lives in its own small R2 object (config/agent_assignments.json)
+    instead of a master_userlist.db table. ci_ingest.py downloads the
+    current copy to this same local path before calling into this module."""
+    if os.path.exists(AGENT_ASSIGNMENTS_PATH):
+        with open(AGENT_ASSIGNMENTS_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_agent_assignments(mapping):
+    with open(AGENT_ASSIGNMENTS_PATH, "w") as f:
+        json.dump(mapping, f)
 
 
 def clean(row):
@@ -81,10 +99,17 @@ def ingest_agents(files):
 
     If a user_id appears in more than one column of the same sheet, the
     left-most column wins (deterministic, and matches how the one such
-    conflict found during initial import was resolved)."""
+    conflict found during initial import was resolved).
+
+    Writes into the local agent_assignments.json file (see
+    load_agent_assignments/save_agent_assignments) -- ci_ingest.py downloads
+    the current copy from R2 before calling this and uploads the updated
+    copy after, the same handoff pattern used for the two DBs. NOT a
+    master_userlist.db table anymore: that meant every agent upload/edit
+    required re-uploading the entire multi-tens-of-MB database just to
+    change a small mapping."""
     conn = sqlite3.connect(MASTER_DB)
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS agent_assignments (user_id INTEGER PRIMARY KEY, agent_name TEXT)")
+    agent_map = load_agent_assignments()
     total_pairs, total_conflicts = 0, 0
     for f in files:
         if already_ingested(conn, f):
@@ -111,18 +136,15 @@ def ingest_agents(files):
                     continue  # left-most column already claimed this user_id
                 mapping.setdefault(uid, agent)
         wb.close()
-        cur.executemany(
-            "INSERT OR REPLACE INTO agent_assignments (user_id, agent_name) VALUES (?, ?)",
-            list(mapping.items()),
-        )
+        for uid, agent in mapping.items():
+            agent_map[str(uid)] = agent
         total_pairs += len(mapping)
         mark_ingested(conn, f)
         conn.commit()
         print(f"  {f}: {len(mapping)} user->agent assignments from sheet '{sheet_name}' ({total_conflicts} same-sheet conflicts resolved left-most-wins)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_name ON agent_assignments(agent_name)")
-    conn.commit()
-    print(f"Agent assignments: {total_pairs} total (user, agent) pairs processed")
     conn.close()
+    save_agent_assignments(agent_map)
+    print(f"Agent assignments: {total_pairs} total (user, agent) pairs processed ({len(agent_map)} total in store)")
 
 
 def ingest_bulk_reassign(files):
@@ -137,11 +159,14 @@ def ingest_bulk_reassign(files):
     agent name fails the WHOLE file rather than silently creating a new,
     slightly-different agent bucket that would never show up correctly
     anywhere else on the dashboard. "Un-Assigned" (case-insensitive) is
-    always accepted and clears the assignment instead of setting one."""
+    always accepted and clears the assignment instead of setting one.
+
+    Writes into agent_assignments.json, same as ingest_agents() -- see that
+    function's docstring for why this moved out of master_userlist.db."""
     conn = sqlite3.connect(MASTER_DB)
     cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS agent_assignments (user_id INTEGER PRIMARY KEY, agent_name TEXT)")
-    known_agents = {row[0] for row in cur.execute("SELECT DISTINCT agent_name FROM agent_assignments").fetchall()}
+    agent_map = load_agent_assignments()
+    known_agents = set(agent_map.values())
 
     for f in files:
         if already_ingested(conn, f):
@@ -190,12 +215,9 @@ def ingest_bulk_reassign(files):
                 missing_users.append(user_id)
                 continue
             if agent_name:
-                cur.execute(
-                    "INSERT OR REPLACE INTO agent_assignments (user_id, agent_name) VALUES (?, ?)",
-                    (user_id, agent_name),
-                )
+                agent_map[str(user_id)] = agent_name
             else:
-                cur.execute("DELETE FROM agent_assignments WHERE user_id = ?", (user_id,))
+                agent_map.pop(str(user_id), None)
             applied += 1
         mark_ingested(conn, f)
         conn.commit()
@@ -205,6 +227,7 @@ def ingest_bulk_reassign(files):
             more = f" (+{len(missing_users) - 20} more)" if len(missing_users) > 20 else ""
             print(f"  Warning: {len(missing_users)} user_id(s) not found in users table, skipped: {shown}{more}")
         print(f"  {f}: {applied} agent reassignments applied")
+    save_agent_assignments(agent_map)
 
     conn.close()
 
@@ -536,9 +559,11 @@ def main():
     if not args.no_upload:
         # Only upload DBs that were actually touched this run -- master_userlist.db is
         # 200MB+ and rarely changes; re-uploading it on every deposits/withdrawals/wallet
-        # pull wastes minutes on the scheduled pipeline for no reason.
+        # pull wastes minutes on the scheduled pipeline for no reason. agents/bulk_reassign
+        # no longer touch master_userlist.db at all -- see load_agent_assignments's
+        # docstring -- ci_ingest.py uploads agent_assignments.json separately instead.
         touched = []
-        if args.userlist or args.agents or args.bulk_reassign:
+        if args.userlist:
             touched.append("master_userlist.db")
         if args.deposits or args.withdrawals or args.wallet:
             touched.append("daily_records.db")

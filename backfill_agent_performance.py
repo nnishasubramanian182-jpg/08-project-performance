@@ -65,9 +65,12 @@ def main():
 
     conn = sqlite3.connect(MASTER_DB)
     cur = conn.cursor()
+    # Agent assignments live in their own R2 object now, not a
+    # master_userlist.db table -- see reassign_agent.py's docstring.
     try:
-        agent_by_user = dict(cur.execute("SELECT user_id, agent_name FROM agent_assignments").fetchall())
-    except sqlite3.OperationalError:
+        agent_obj = s3.get_object(Bucket=bucket, Key="config/agent_assignments.json")
+        agent_by_user = {int(uid): name for uid, name in json.loads(agent_obj["Body"].read()).items()}
+    except Exception:
         agent_by_user = {}
     agent_list = sorted(set(agent_by_user.values()))
     if not agent_list:

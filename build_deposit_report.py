@@ -3110,10 +3110,17 @@ def main():
         total_registered_users = mconn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         vip_by_user = dict(mconn.execute("SELECT user_id, vip_level FROM users").fetchall())
         city_by_user = dict(mconn.execute("SELECT user_id, city FROM users").fetchall())
-        try:
-            agent_by_user = dict(mconn.execute("SELECT user_id, agent_name FROM agent_assignments").fetchall())
-        except sqlite3.OperationalError:
-            agent_by_user = {}  # table doesn't exist yet -- pre-dates this feature
+        # Agent assignments live in their own small R2 object (see
+        # reassign_agent.py's docstring), not a master_userlist.db table --
+        # moved out because reassigning a user used to require re-uploading
+        # the entire multi-tens-of-MB database just to change a couple of
+        # rows. Loaded fresh from R2 every run (no local same-job artifact,
+        # unlike reactivation_candidates -- nothing upstream of this script
+        # writes it locally).
+        agent_json_path = os.path.join(BASE, "agent_assignments.json")
+        raw_agent_map = load_json_with_r2_fallback(agent_json_path, "config/agent_assignments.json", load_creds(), {})
+        banned_id_set = set(banned_ids)
+        agent_by_user = {int(uid): name for uid, name in raw_agent_map.items() if int(uid) not in banned_id_set}
         action_center = action_center_reports(mconn, now, agent_by_user)
         weekly_cashback = weekly_cashback_shield(mconn, deposit_rows, withdrawal_rows, agent_by_user, now)
         fallback_creds = load_creds()
