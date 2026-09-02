@@ -183,7 +183,11 @@ document.getElementById('tokenForm').addEventListener('submit', async (e) => {
   const msg = document.getElementById('tokenMsg');
   const input = document.getElementById('tokenInput');
   const token = input.value.trim();
-  if (!token) return;
+  if (!token) {
+    msg.textContent = 'Paste the new bearer token first.';
+    msg.className = 'err';
+    return;
+  }
   const password = prompt('Enter password to update the API token:');
   if (password === null) return;
   btn.disabled = true;
