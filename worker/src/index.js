@@ -89,6 +89,49 @@ document.getElementById('triggerPipelineBtn').addEventListener('click', async ()
 
 <hr style="margin:40px 0;border:none;border-top:1px solid #eee;">
 
+<h1>Add New Agent</h1>
+<p>Onboards an agent BEFORE any users are assigned to them -- Reassign Agent and Agent Logins only show agents who already have at least one user, so a brand-new agent can't log in until they're added here (or get their first reassignment). One name per line. Restarts the pipeline immediately, so the login is ready in a couple of minutes.</p>
+<textarea id="addAgentsInput" placeholder="Vaani&#10;Atif&#10;Akash" style="width:100%;min-height:70px;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit;"></textarea>
+<button id="addAgentsBtn" style="margin-top:10px;background:#4f46e5;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Add Agent(s)</button>
+<div id="addAgentsMsg" style="margin-top:10px;font-size:14px;"></div>
+
+<script>
+document.getElementById('addAgentsBtn').addEventListener('click', async () => {
+  const input = document.getElementById('addAgentsInput');
+  const btn = document.getElementById('addAgentsBtn');
+  const msg = document.getElementById('addAgentsMsg');
+  const names = input.value.split('\\n').map(s => s.trim()).filter(Boolean);
+  if (!names.length) {
+    msg.textContent = 'Enter at least one agent name first.';
+    msg.className = 'err';
+    return;
+  }
+  const password = prompt('Enter password to add ' + names.length + ' agent(s):');
+  if (password === null) return;
+  btn.disabled = true;
+  msg.textContent = 'Adding...';
+  msg.className = '';
+  try {
+    const res = await fetch('/add-agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agents: names, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    msg.textContent = 'Added: ' + data.added.join(', ') + ' -- pipeline restarting, logins ready in a couple of minutes.';
+    msg.className = 'ok';
+    input.value = '';
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'err';
+  }
+  btn.disabled = false;
+});
+</script>
+
+<hr style="margin:40px 0;border:none;border-top:1px solid #eee;">
+
 <h1>Agent Logins</h1>
 <p>Every agent currently in the agent list, with their dashboard login password (first 2 letters of their name + "0987", bumped to 3 letters for any agent whose 2-letter prefix collides with another -- or a custom password, if you've changed one). Computed fresh from the current list every time -- a newly added agent shows up here automatically, nothing to separately create. Use "Change" to set a custom password for any agent; it replaces their default one.</p>
 <button id="agentLoginsBtn" style="background:#4f46e5;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Show Agent Logins</button>
@@ -317,19 +360,31 @@ function agentNameLetters(name) {
 }
 
 function computeAgentPasswords(agentNames) {
+  // Kept byte-for-byte in sync with report_worker's copy of this function --
+  // see its comment for why the prefix has to GROW until unique rather than
+  // bump once to 3 letters (a single bump isn't enough for e.g. "Akansha"
+  // vs "Akash", which still share their first 3 letters).
   const withLetters = agentNames.map((n) => ({ name: n, letters: agentNameLetters(n) }));
-  const byPrefix2 = new Map();
-  for (const a of withLetters) {
-    const p = a.letters.slice(0, 2);
-    if (!byPrefix2.has(p)) byPrefix2.set(p, []);
-    byPrefix2.get(p).push(a);
-  }
+  const passwordToAgent = new Map();
   const agentToPassword = new Map();
   for (const a of withLetters) {
-    const p2 = a.letters.slice(0, 2);
-    const collides = byPrefix2.get(p2).length > 1;
-    const prefix = collides ? a.letters.slice(0, 3) : p2;
-    agentToPassword.set(a.name, prefix + "0987");
+    let len = 2;
+    let prefix = a.letters.slice(0, len);
+    while (
+      len < a.letters.length &&
+      withLetters.some((b) => b !== a && b.letters.slice(0, len) === prefix)
+    ) {
+      len++;
+      prefix = a.letters.slice(0, len);
+    }
+    let password = prefix + "0987";
+    let suffix = 2;
+    while (passwordToAgent.has(password) && passwordToAgent.get(password) !== a.name) {
+      password = prefix + suffix + "0987";
+      suffix++;
+    }
+    passwordToAgent.set(password, a.name);
+    agentToPassword.set(a.name, password);
   }
   return { agentToPassword };
 }
@@ -475,6 +530,41 @@ export default {
         // Restart the pipeline right away instead of waiting for the next scheduled tick.
         await dispatchWorkflow(env, "api_pull.yml", {});
         return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        return jsonError(err.message || "Unknown error", 500);
+      }
+    }
+
+    // Onboards agent names with NO users assigned yet -- the dashboard login
+    // list (reports/agent_list.json, built by build_deposit_report.py) is
+    // otherwise derived purely from agent_assignments, so a brand-new agent
+    // can't log in at all until someone reassigns them at least one user.
+    // This just adds their name to config/agent_roster.json, which
+    // build_deposit_report.py unions into agent_list every run -- then
+    // restarts the pipeline so the login exists within a couple of minutes
+    // instead of waiting for the next scheduled run.
+    if (request.method === "POST" && url.pathname === "/add-agents") {
+      try {
+        const { agents, password } = await request.json();
+        if (password !== env.ACTION_PASSWORD) {
+          return jsonError("Access Denied", 403);
+        }
+        if (!Array.isArray(agents) || !agents.length) {
+          return jsonError("agents must be a non-empty array of names", 400);
+        }
+        const names = agents.map((n) => String(n).trim()).filter(Boolean);
+        if (!names.length) {
+          return jsonError("agents must be a non-empty array of names", 400);
+        }
+        let roster = { agents: [] };
+        const rosterObj = await env.USERLIST_BUCKET.get("config/agent_roster.json");
+        if (rosterObj) roster = await rosterObj.json();
+        const merged = new Set([...(roster.agents || []), ...names]);
+        await env.USERLIST_BUCKET.put("config/agent_roster.json", JSON.stringify({ agents: [...merged] }));
+        await dispatchWorkflow(env, "api_pull.yml", {});
+        return new Response(JSON.stringify({ ok: true, added: names, total: merged.size }), {
           headers: { "content-type": "application/json" },
         });
       } catch (err) {

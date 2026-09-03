@@ -3367,7 +3367,15 @@ def main():
     # window for the Performance page -- small enough (agents x 7 categories
     # x up to 35 days) to ship in full and let the frontend do date-range
     # filtering/aggregation client-side, same pattern as premium_active etc.
-    agent_list = sorted(set(agent_by_user.values()))
+    # Union with the standing agent roster (config/agent_roster.json) so a
+    # brand-new agent gets a dashboard login (see report_worker's
+    # computeAgentPasswords, which reads this same agent_list) BEFORE they
+    # have any users assigned -- agent_by_user alone only knows about
+    # agents someone has already reassigned at least one user to.
+    roster = load_json_with_r2_fallback(
+        os.path.join(BASE, "agent_roster.json"), "config/agent_roster.json", load_creds(), {"agents": []}
+    )
+    agent_list = sorted(set(agent_by_user.values()) | set(roster.get("agents", [])))
     agent_performance_rows = []
     if os.path.exists(master_db_path) and agent_list:
         mconn4 = sqlite3.connect(master_db_path)

@@ -4148,20 +4148,35 @@ function agentNameLetters(name) {
 }
 
 function computeAgentPasswords(agentNames) {
+  // Prefix length grows (2 -> 3 -> 4 -> ...) until it no longer collides
+  // with any OTHER agent's same-length prefix -- NOT just a single fixed
+  // bump to 3 letters. A single bump isn't enough once two names share
+  // their first 3 letters too (e.g. "Akansha" and "Akash" both start
+  // "AKA") -- the old fixed-bump version silently gave both agents the
+  // identical password, locking one of them out with no error anywhere.
   const withLetters = agentNames.map(n => ({ name: n, letters: agentNameLetters(n) }));
-  const byPrefix2 = new Map();
-  for (const a of withLetters) {
-    const p = a.letters.slice(0, 2);
-    if (!byPrefix2.has(p)) byPrefix2.set(p, []);
-    byPrefix2.get(p).push(a);
-  }
   const passwordToAgent = new Map();
   const agentToPassword = new Map();
   for (const a of withLetters) {
-    const p2 = a.letters.slice(0, 2);
-    const collides = byPrefix2.get(p2).length > 1;
-    const prefix = collides ? a.letters.slice(0, 3) : p2;
-    const password = prefix + "0987";
+    let len = 2;
+    let prefix = a.letters.slice(0, len);
+    while (
+      len < a.letters.length &&
+      withLetters.some(b => b !== a && b.letters.slice(0, len) === prefix)
+    ) {
+      len++;
+      prefix = a.letters.slice(0, len);
+    }
+    let password = prefix + "0987";
+    // Even rarer: two agents whose full letters are identical (e.g. the
+    // same name differing only by a stripped "(WFH)"/"(SL)" tag) -- no
+    // prefix length can separate those, so number the later one instead
+    // of silently colliding.
+    let suffix = 2;
+    while (passwordToAgent.has(password) && passwordToAgent.get(password) !== a.name) {
+      password = prefix + suffix + "0987";
+      suffix++;
+    }
     passwordToAgent.set(password, a.name);
     agentToPassword.set(a.name, password);
   }
