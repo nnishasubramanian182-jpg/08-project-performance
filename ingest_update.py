@@ -319,6 +319,20 @@ def ingest_withdrawals(files):
     # later) must overwrite the existing row, not be silently skipped.
     conn = sqlite3.connect(DAILY_DB)
     cur = conn.cursor()
+    # Self-healing schema migration: the business API added an `update_by`
+    # column to the withdrawal export at some point (confirmed against
+    # project 04's already-updated schema), which broke every run with
+    # "Incorrect number of bindings supplied" once this project's table
+    # (bootstrapped before that change) started receiving 37-column rows
+    # against a 36-column table. try/except makes this a no-op once applied
+    # -- safe to leave in permanently rather than depending on a one-off
+    # manual migration.
+    try:
+        cur.execute("ALTER TABLE withdrawals ADD COLUMN update_by TEXT")
+        conn.commit()
+        print("  Migrated withdrawals table: added update_by column")
+    except sqlite3.OperationalError:
+        pass  # already has the column
     n_cols = len(cur.execute("PRAGMA table_info(withdrawals)").fetchall())
     added = 0
     for f in files:

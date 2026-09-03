@@ -106,14 +106,15 @@ CREATE TABLE withdrawals (
     manual_transfer_img TEXT,
     create_time TEXT,
     update_time TEXT,
-    package_id REAL
+    package_id REAL,
+    update_by TEXT
 )
 """)
 cur.execute("CREATE INDEX idx_wd_user ON withdrawals(user_id)")
 cur.execute("CREATE INDEX idx_wd_time ON withdrawals(create_time)")
 
 wd_rows = load_sheet("/Users/devtr/Downloads/withdraw_1782976617016.xlsx")
-cur.executemany(f"INSERT INTO withdrawals VALUES ({','.join(['?']*36)})", [clean(r) for r in wd_rows])
+cur.executemany(f"INSERT INTO withdrawals VALUES ({','.join(['?']*37)})", [clean(r) for r in wd_rows])
 conn.commit()
 print("withdrawals:", len(wd_rows))
 # status: 0 Under review, 1 Payment processing, 2 Completed, 3 Rejected, 4 Failed
