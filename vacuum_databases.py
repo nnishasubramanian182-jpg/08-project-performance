@@ -61,7 +61,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Trigger marker 2026-09-15 (retry, first attempt got bumped from the
-# concurrency queue by the next hourly cron): touched again to fire
-# vacuum_databases.yml's temporary push trigger.
