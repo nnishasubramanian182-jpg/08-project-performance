@@ -154,6 +154,9 @@ const PAGE = `<!DOCTYPE html>
 
   .row2col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
   @media (max-width: 1000px) { .row2col { grid-template-columns: 1fr; } }
+  .row3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 1300px) { .row3col { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 700px) { .row3col { grid-template-columns: 1fr; } }
 
   section { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); border-left: 4px solid #6366f1; }
   section.acc-blue { border-left-color: #3b82f6; }
@@ -3485,7 +3488,7 @@ if (!IS_ACTION_CENTER && !IS_PERFORMANCE && !IS_ANALYTICS && !IS_PLATFORM_ANALYS
       </section>
     </div>
 
-    <div class="row2col">
+    <div class="row3col">
       <section class="acc-cyan ac-compact">
         <div class="section-head">
           <div class="sec-title"><div class="badge b-cyan">&#128181;</div><h2>Withdrawal Amount Range</h2></div>
@@ -3505,6 +3508,15 @@ if (!IS_ACTION_CENTER && !IS_PERFORMANCE && !IS_ANALYTICS && !IS_PLATFORM_ANALYS
         <div class="ac-note">Users with total deposits of Rs 10,000+ for the selected date</div>
         <div id="highest-deposit-table"></div>
         <div class="ac-pagination" id="highest-deposit-pagination"></div>
+      </section>
+      <section class="acc-cyan ac-compact">
+        <div class="section-head">
+          <div class="sec-title"><div class="badge b-cyan">&#128184;</div><h2>Highest Withdraw Users</h2><span class="today-tag" id="highest-withdraw-count">&mdash;</span></div>
+          <button class="download-btn-sm" id="btn-dl-highest-withdraw-users">&#128190; Excel</button>
+        </div>
+        <div class="ac-note">Users with total withdrawals of Rs 10,000+ for today (deposit column is today's deposit only, 0 if none)</div>
+        <div id="highest-withdraw-table"></div>
+        <div class="ac-pagination" id="highest-withdraw-pagination"></div>
       </section>
     </div>
   \`;
@@ -3588,6 +3600,17 @@ if (!IS_ACTION_CENTER && !IS_PERFORMANCE && !IS_ANALYTICS && !IS_PLATFORM_ANALYS
     ];
     paginatedTable('highest-deposit-table', 'highest-deposit-pagination', scope.top_depositors || [], highestDepositCols, 6, { jumpDropdown: true });
     document.getElementById('highest-deposit-count').textContent = fmt((scope.top_depositors || []).length);
+
+    // top_withdrawers is always TODAY's totals, fixed regardless of which
+    // date is selected on the page (unlike top_depositors above, which
+    // follows the date picker) -- lives on the top-level data object, not scope.
+    const highestWithdrawCols = [
+      { label: 'User ID', render: r => r.user_id },
+      { label: 'Total Withdraw', num: true, render: r => money(r.total_withdraw), raw: r => r.total_withdraw },
+      { label: 'Total Deposit', num: true, render: r => money(r.total_deposit), raw: r => r.total_deposit },
+    ];
+    paginatedTable('highest-withdraw-table', 'highest-withdraw-pagination', data.top_withdrawers || [], highestWithdrawCols, 6, { jumpDropdown: true });
+    document.getElementById('highest-withdraw-count').textContent = fmt((data.top_withdrawers || []).length);
   }
 
   function renderWithdrawalTimingTable(containerId, matrix, emptyMsg) {
@@ -4025,6 +4048,13 @@ if (!IS_ACTION_CENTER && !IS_PERFORMANCE && !IS_ANALYTICS && !IS_PLATFORM_ANALYS
     if (!rows.length) return;
     const exportRows = rows.map(r => ({ 'User ID': r.user_id, 'Total Deposit': r.total_deposit, 'Total Withdraw': r.total_withdraw }));
     downloadStyledExcel(exportRows, 'Highest Deposit Users', 'highest-deposit-users-' + datePicker.value + '.xlsx');
+  });
+
+  document.getElementById('btn-dl-highest-withdraw-users').addEventListener('click', () => {
+    const rows = data.top_withdrawers || [];
+    if (!rows.length) return;
+    const exportRows = rows.map(r => ({ 'User ID': r.user_id, 'Total Withdraw': r.total_withdraw, 'Total Deposit (Today)': r.total_deposit }));
+    downloadStyledExcel(exportRows, 'Highest Withdraw Users', 'highest-withdraw-users-' + (data.report_today || 'export') + '.xlsx');
   });
 
   // Date picker wiring

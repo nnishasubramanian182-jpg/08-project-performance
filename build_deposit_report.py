@@ -125,6 +125,39 @@ def top_depositors(records, withdrawal_records, min_total=TOP_DEPOSITORS_MIN_TOT
     return rows[:limit]
 
 
+TOP_WITHDRAWERS_MIN_TOTAL = 10000.0
+
+
+def top_withdrawers(records, withdrawal_records, min_total=TOP_WITHDRAWERS_MIN_TOTAL, limit=500):
+    """TODAY's highest-withdrawal users. total_withdraw is TODAY's per-user
+    withdrawal total, not lifetime. Counts only In-Review/Processing/
+    Complete orders (statuses 0/1/2, excludes Rejected/Failed), same
+    convention as top_depositors()'s accompanying withdrawal total just
+    above -- "applied a withdrawal" means the request amount, not only ones
+    that finished successfully. Filtered to users whose TODAY total is >=
+    min_total, sorted descending. total_deposit is TODAY's completed
+    deposit total (0 if none) for the same set of users. Powers the Home
+    page's Highest Withdraw Users table -- both columns are today-only, not
+    any user's lifetime totals."""
+    withdraw_totals = defaultdict(float)
+    for r in withdrawal_records:
+        if r["status"] in (0, 1, 2) and r["user_id"] is not None:
+            withdraw_totals[r["user_id"]] += r["amount"]
+    qualifying = {uid for uid, amt in withdraw_totals.items() if amt >= min_total}
+
+    deposit_totals = defaultdict(float)
+    for r in records:
+        if r["status"] == "COMPLETE" and r["user_id"] in qualifying:
+            deposit_totals[r["user_id"]] += r["amount"]
+
+    rows = [
+        {"user_id": uid, "total_withdraw": round(amt, 2), "total_deposit": round(deposit_totals.get(uid, 0.0), 2)}
+        for uid, amt in withdraw_totals.items() if uid in qualifying
+    ]
+    rows.sort(key=lambda x: -x["total_withdraw"])
+    return rows[:limit]
+
+
 def aggregate(records):
     """
     records: list of dicts with keys channel, amount, hour, status,
@@ -3350,6 +3383,9 @@ def main():
 
     today_str = now.date().isoformat()
     yesterday_str = (now.date() - timedelta(days=1)).isoformat()
+
+    top_withdrawer_rows = top_withdrawers(by_date_records.get(today_str, []), by_date_withdrawals.get(today_str, []))
+
     withdrawal_amount_range_by_day = {
         "today": withdrawal_amount_range_day_report(by_date_withdrawal_full.get(today_str, []), today_str),
         "yesterday": withdrawal_amount_range_day_report(by_date_withdrawal_full.get(yesterday_str, []), yesterday_str),
@@ -3556,6 +3592,7 @@ def main():
         "action_center": action_center,
         "action_center_extra": action_center_extra,
         "weekly_cashback_shield": weekly_cashback,
+        "top_withdrawers": top_withdrawer_rows,
         "fd_retention_report": fd_retention_report,
         "region_vip_analytics": region_vip_analytics_data,
         "reactivation": reactivation,
