@@ -149,3 +149,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Trigger marker 2026-09-15: touched to fire backfill_range.yml's temporary
+# push trigger (GitHub Actions "Run workflow" button isn't rendering for
+# this repo, no available credential has API dispatch rights either).
