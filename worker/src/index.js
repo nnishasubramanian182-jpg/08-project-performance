@@ -642,6 +642,31 @@ export default {
       }
     }
 
+    // One-off: re-fetch deposits/withdrawals/wallet for an explicit date
+    // range and re-ingest (see backfill_range.py). Unlike the hourly
+    // pipeline's rolling 5-day window, this can reach arbitrarily far
+    // back -- for verifying/filling a specific historical window on
+    // demand. Safe to re-run over already-captured days (idempotent
+    // INSERT OR REPLACE/IGNORE on the ingest side).
+    if (request.method === "POST" && url.pathname === "/backfill-range") {
+      try {
+        const { from_date, to_date, password } = await request.json();
+        if (password !== env.ACTION_PASSWORD) {
+          return jsonError("Access Denied", 403);
+        }
+        const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+        if (!from_date || !to_date || !dateRe.test(from_date) || !dateRe.test(to_date)) {
+          return jsonError("from_date and to_date must be YYYY-MM-DD", 400);
+        }
+        await dispatchWorkflow(env, "backfill_range.yml", { from_date, to_date });
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        return jsonError(err.message || "Unknown error", 500);
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/notify") {
       try {
         const { key, file_type } = await request.json();

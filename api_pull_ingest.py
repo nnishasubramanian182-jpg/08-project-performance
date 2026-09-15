@@ -552,6 +552,18 @@ def sync_master_userlist(master_db_path, deposit_rows, withdrawal_rows, wallet_a
               "total_withdrawal": tw, "withdrawal_sync_time": wst, "recharge_count": rc}
         for uid, tr, vl, st, lat, tw, wst, rc in existing_rows
     }
+    # Users deliberately removed by ingest_userlist()'s prune step (absent
+    # from the platform's own userlist export) but whose recent deposit/
+    # withdrawal/wallet activity is still retained in daily_records.db --
+    # without this check, the "new user" branch below would treat that
+    # retained activity as evidence of a genuinely new user and silently
+    # re-insert them every run. See ingest_userlist()'s prune step for the
+    # full explanation and how a user gets un-tombstoned if they
+    # legitimately reappear in a later userlist upload.
+    try:
+        removed_ids = {r[0] for r in cur.execute("SELECT user_id FROM removed_users").fetchall()}
+    except sqlite3.OperationalError:
+        removed_ids = set()  # table doesn't exist yet -- no one has ever been pruned
 
     fixed = 0
     for uid, info in existing.items():
@@ -667,6 +679,12 @@ def sync_master_userlist(master_db_path, deposit_rows, withdrawal_rows, wallet_a
         latest_activity = max(candidate_times)
 
         prior = existing.get(user_id)
+        if prior is None and user_id in removed_ids:
+            # Deliberately pruned by ingest_userlist() -- their retained
+            # transaction history isn't evidence of a new user, it's just
+            # history we chose to keep. Stays gone until they legitimately
+            # reappear in a future userlist upload.
+            continue
         fresh_balance = wallet_balance_by_user.get(user_id)
         if fresh_balance is not None and user_id in adjustments:
             fresh_balance = round(fresh_balance + adjustments[user_id], 2)

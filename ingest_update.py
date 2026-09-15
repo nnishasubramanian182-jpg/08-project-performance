@@ -19,6 +19,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 MASTER_DB = os.path.join(BASE, "master_userlist.db")
@@ -257,11 +258,17 @@ def ingest_userlist(files):
     insert_cols_sql = ", ".join(file_cols)
     update_cols_sql = ", ".join(f"{c} = ?" for c in file_cols[1:])  # skip user_id (WHERE key, not SET)
     updated, inserted, skipped_files, skipped_rows = 0, 0, 0, 0
+    present_ids = set()
     for f in files:
-        if already_ingested(conn, f):
+        skip_write = already_ingested(conn, f)
+        if skip_write:
             print(f"  skip (already ingested): {f}")
             skipped_files += 1
-            continue
+        # Rows are read even for an already-ingested file: `present_ids`
+        # below needs every user_id this file lists regardless of whether
+        # its insert/update work was already applied in a prior run --
+        # skipping the read here would make the prune step below think
+        # those users are no longer in the platform's userlist at all.
         _, rows = load_sheet(f)
         for row in rows:
             if row[0] is None:
@@ -277,6 +284,9 @@ def ingest_userlist(files):
                 continue
             row[0] = int(float(row[0]))
             uid = row[0]
+            present_ids.add(uid)
+            if skip_write:
+                continue
             existing = cur.execute("SELECT update_time FROM users WHERE user_id = ?", (uid,)).fetchone()
             if existing is None:
                 cur.execute(f"INSERT INTO users ({insert_cols_sql}) VALUES ({','.join(['?']*n_cols)})", row)
@@ -286,9 +296,74 @@ def ingest_userlist(files):
                 if new_ut is not None and (old_ut is None or str(new_ut) > str(old_ut)):
                     cur.execute(f"UPDATE users SET {update_cols_sql} WHERE user_id = ?", row[1:] + [uid])
                     updated += 1
-        mark_ingested(conn, f)
+        if not skip_write:
+            mark_ingested(conn, f)
         conn.commit()
     print(f"Master Userlist: {inserted} new, {updated} updated, {skipped_rows} rows skipped (bad shape), {skipped_files} files already ingested")
+
+    # Prune users no longer present in the platform's own userlist export.
+    # A "new userlist" always arrives as a single file (never split across
+    # multiple uploads), so `present_ids` -- built from every file passed
+    # to this call -- is the complete, current set of real users; anyone
+    # in `users` but not in it is gone from the platform and gets removed
+    # here. No safety threshold on how many get removed.
+    #
+    # Cascades to every other user_id-keyed table in master_userlist.db
+    # (balance_adjustments, banned_users) so nothing is left pointing at a
+    # user_id that no longer exists in `users`. agent_assignments lives in
+    # its own R2 object now (config/agent_assignments.json), not a
+    # master_userlist.db table, so it's not touched here -- a stray entry
+    # for a removed user_id there is inert (nothing downstream looks it up
+    # except by a user_id that still exists in `users`). Deliberately does
+    # NOT touch daily_records.db -- a removed user's recent deposit/
+    # withdrawal/wallet/bonus history (33-day rolling window) is kept for
+    # reporting/audit purposes even after their profile is gone.
+    #
+    # Also tombstones every removed user_id in `removed_users`. This is
+    # required, not optional: since transaction history is kept, the very
+    # next hourly api_pull_ingest.py run would otherwise see a removed
+    # user's retained deposit/withdrawal/wallet activity, find no `users`
+    # row for them, and silently re-insert them as a "new" user (confirmed
+    # in production on the reference project this pipeline was cloned
+    # from). sync_master_userlist() checks this table before treating an
+    # unrecognized user_id as genuinely new. A user_id is un-tombstoned
+    # below if they reappear in a later userlist upload, so a real
+    # returning user isn't blocked forever by an old removal.
+    if present_ids:
+        cur.execute("CREATE TABLE IF NOT EXISTS removed_users (user_id INTEGER PRIMARY KEY, removed_at TEXT)")
+        existing_ids = {r[0] for r in cur.execute("SELECT user_id FROM users").fetchall()}
+        remove_ids = list(existing_ids - present_ids)
+        CHUNK = 500  # stay well under SQLite's per-statement variable limit
+        if remove_ids:
+            removed_at = datetime.utcnow().isoformat()
+            for i in range(0, len(remove_ids), CHUNK):
+                chunk = remove_ids[i:i + CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                cur.execute(f"DELETE FROM users WHERE user_id IN ({placeholders})", chunk)
+                for table in ("balance_adjustments", "banned_users"):
+                    try:
+                        cur.execute(f"DELETE FROM {table} WHERE user_id IN ({placeholders})", chunk)
+                    except sqlite3.OperationalError:
+                        pass  # table doesn't exist yet on a from-scratch DB
+                cur.executemany(
+                    "INSERT OR REPLACE INTO removed_users (user_id, removed_at) VALUES (?, ?)",
+                    [(uid, removed_at) for uid in chunk],
+                )
+            conn.commit()
+        print(f"Master Userlist prune: {len(remove_ids)} user(s) removed (no longer in the uploaded userlist)")
+
+        # Un-tombstone anyone who's reappeared in this upload -- they're
+        # confirmed real again by the platform's own current userlist.
+        present_list = list(present_ids)
+        untombstoned = 0
+        for i in range(0, len(present_list), CHUNK):
+            chunk = present_list[i:i + CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            cur.execute(f"DELETE FROM removed_users WHERE user_id IN ({placeholders})", chunk)
+            untombstoned += cur.rowcount
+        if untombstoned:
+            conn.commit()
+            print(f"Master Userlist prune: {untombstoned} previously-removed user(s) un-tombstoned (reappeared in this upload)")
     conn.close()
 
 
@@ -414,9 +489,59 @@ def classify_bonus(game_name, source, source_id):
 CLASSIFY_BONUS_RULES_VERSION = 4
 
 
+def stable_wallet_id(raw_id, create_time):
+    """The source's numeric `id` is only unique within roughly a calendar
+    month -- confirmed on the reference project (same business platform)
+    that a new month's ids restart from a low base and land in the exact
+    same range the prior month's did. Since wallet_transactions/bonuses
+    retain a rolling 33-day window, the prior month's rows are still
+    physically present when a new month starts, so INSERT OR IGNORE
+    silently discards nearly all of the new month's real transactions as
+    false-positive duplicates of the equivalent day a month back. Folding
+    in a year-month component keeps ids globally unique going forward
+    without touching already-stored historical rows; the original id is
+    still recoverable via `stable_id % 1_000_000_000`."""
+    try:
+        raw_id = int(raw_id)
+    except (TypeError, ValueError):
+        return raw_id
+    ct = str(create_time) if create_time else ""
+    if len(ct) < 7:
+        return raw_id
+    try:
+        year, month = int(ct[0:4]), int(ct[5:7])
+    except ValueError:
+        return raw_id
+    month_index = year * 12 + month
+    return month_index * 1_000_000_000 + raw_id
+
+
 def ingest_wallet(files):
     conn = sqlite3.connect(DAILY_DB)
     cur = conn.cursor()
+
+    # One-time schema shrink: wallet_transactions carries 20 columns copied
+    # verbatim from the raw business-API export, but only 10 are ever read
+    # anywhere -- the other 10 (table_name, user_phone, create_date,
+    # tripartite_uniqueness, l1_category_id, l2_category_id, status,
+    # change_desc, update_time, package_id) are pure dead weight, and this
+    # table is the overwhelming majority of daily_records.db's size. DROP
+    # COLUMN in SQLite 3.35+ is a cheap schema-only edit (no table rewrite,
+    # no index touched -- none of these columns are indexed), so this runs
+    # safely inside the regular hourly ingest. Actual disk space isn't
+    # reclaimed until the next VACUUM (vacuum_databases.yml, weekly) --
+    # expected, matching how every other retention purge here works.
+    # Idempotent: skips columns already dropped.
+    existing_cols = {r[1] for r in cur.execute("PRAGMA table_info(wallet_transactions)").fetchall()}
+    for col in (
+        "table_name", "user_phone", "create_date", "tripartite_uniqueness",
+        "l1_category_id", "l2_category_id", "status", "change_desc",
+        "update_time", "package_id",
+    ):
+        if col in existing_cols:
+            cur.execute(f"ALTER TABLE wallet_transactions DROP COLUMN {col}")
+    conn.commit()
+
     n_cols = len(cur.execute("PRAGMA table_info(wallet_transactions)").fetchall())
     # bonuses is normally created once by the original bootstrap (build_daily_records.py),
     # not by this ongoing script -- IF NOT EXISTS here so a from-scratch daily_records.db
@@ -451,13 +576,20 @@ def ingest_wallet(files):
         _, rows = load_sheet(f)
         for row in rows:
             row = clean(row)
-            cur.execute(f"INSERT OR IGNORE INTO wallet_transactions VALUES ({','.join(['?']*n_cols)})", row)
+            # `row` here is still the FULL raw 20-column export shape --
+            # these positional indices (game_name=1, user_id=2, consume_type=3,
+            # direction=4, change_value=5, change_after=6, source_id=8,
+            # source=12, create_time=17) are the raw export's, not the
+            # (now 10-column) wallet_transactions table's, and stay fixed
+            # regardless of which columns the table above just dropped.
+            _id = stable_wallet_id(row[0], row[17])
+            game_name, user_id, consume_type, direction = row[1], row[2], row[3], row[4]
+            change_value, change_after = row[5], row[6]
+            source_id, source, create_time = row[8], row[12], row[17]
+            trimmed = (_id, game_name, user_id, consume_type, direction, change_value, change_after, source_id, source, create_time)
+            cur.execute(f"INSERT OR IGNORE INTO wallet_transactions VALUES ({','.join(['?']*n_cols)})", trimmed)
             if cur.rowcount:
                 added += 1
-                _id, game_name, user_id = row[0], row[1], row[2]
-                change_value, change_after = row[5], row[6]
-                create_time, source = row[17], row[12]
-                source_id = row[8]
                 matched = classify_bonus(game_name, source, source_id)
                 if matched:
                     new_bonus_rows.append((_id, user_id, game_name, matched, change_value, change_after, create_time, source))
