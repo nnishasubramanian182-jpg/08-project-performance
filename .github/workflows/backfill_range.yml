@@ -9,13 +9,6 @@ on:
       to_date:
         description: "End date, YYYY-MM-DD (inclusive)"
         required: true
-  # TEMPORARY one-off trigger: the GitHub Actions "Run workflow" UI button
-  # is not rendering for this repo, and no available credential has write
-  # access to dispatch via the REST API either. `push` needs neither --
-  # revert this block right after the one-time run it's here for.
-  push:
-    branches: [main]
-    paths: ["backfill_range.py"]
 
 concurrency:
   group: db-ingest
@@ -41,7 +34,7 @@ jobs:
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          python3 backfill_range.py --from-date "${{ inputs.from_date || '2026-09-01' }}" --to-date "${{ inputs.to_date || '2026-09-15' }}"
+          python3 backfill_range.py --from-date "${{ inputs.from_date }}" --to-date "${{ inputs.to_date }}"
 
       - name: Refresh deposit report
         env:
