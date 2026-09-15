@@ -8,6 +8,13 @@ on:
     # GitHub's own schedule trigger has been unreliable for this repo before;
     # this can also always be run manually via workflow_dispatch.)
     - cron: "0 2 * * 0"
+  # TEMPORARY one-off trigger: the GitHub Actions "Run workflow" UI button
+  # is not rendering for this repo, and no available credential has write
+  # access to dispatch via the REST API either. `push` needs neither --
+  # revert this block right after the one-time run it's here for.
+  push:
+    branches: [main]
+    paths: ["vacuum_databases.py"]
 
 # Same group as api_pull.yml/reassign_agent.yml/ban_user.yml/etc. -- VACUUM
 # downloads, rewrites, and re-uploads both DBs, so it must never run

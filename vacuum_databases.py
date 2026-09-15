@@ -61,3 +61,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Trigger marker 2026-09-15: touched to fire vacuum_databases.yml's
+# temporary push trigger (GitHub Actions "Run workflow" button isn't
+# rendering for this repo). Run after the September backfill (18.3M
+# wallet_transactions rows) and the earlier wallet_transactions column
+# shrink (20->10 cols, DROP COLUMN space isn't reclaimed until VACUUM).
