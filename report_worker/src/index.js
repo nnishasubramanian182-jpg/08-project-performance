@@ -564,6 +564,16 @@ function scopeReportToAgent(data, agentName) {
     };
   }
 
+  if (scoped.new_users_lossback) {
+    const rows = filterRows(scoped.new_users_lossback.rows);
+    scoped.new_users_lossback = {
+      ...scoped.new_users_lossback,
+      rows,
+      eligible_count: rows.length,
+      total_reward: Math.round(rows.reduce((s, r) => s + r.reward_amount, 0) * 100) / 100,
+    };
+  }
+
   for (const key of ['reactivation', 'vip_upgrade']) {
     if (!scoped[key]) continue;
     const out = { ...scoped[key] };
@@ -825,6 +835,18 @@ if (IS_ACTION_CENTER) {
       { label: 'Bonus Amount', render: r => money(r.bonus_amount), raw: r => r.bonus_amount, num: true },
     ];
     const wcs = data.weekly_cashback_shield;
+
+    const newUsersLossbackCols = [
+      { label: 'User ID', render: r => r.user_id, raw: r => r.user_id },
+      { label: 'Agent', render: r => r.agent || 'Un-Assigned', raw: r => r.agent || 'Un-Assigned' },
+      { label: 'VIP', render: r => (r.vip_level == null ? '&mdash;' : r.vip_level), raw: r => r.vip_level, num: true },
+      { label: 'Total Deposit', render: r => money(r.total_deposit), raw: r => r.total_deposit, num: true },
+      { label: 'Wallet Balance', render: r => money(r.wallet_balance), raw: r => r.wallet_balance, num: true },
+      { label: 'Balance %', render: r => Number(r.balance_pct).toFixed(2) + '%', raw: r => r.balance_pct, num: true },
+      { label: 'Reward %', render: r => Number(r.reward_pct).toFixed(2) + '%', raw: r => r.reward_pct, num: true },
+      { label: 'Reward Amount', render: r => money(r.reward_amount), raw: r => r.reward_amount, num: true },
+    ];
+    const nul = data.new_users_lossback;
     const fdr = data.fd_retention_report;
 
     document.getElementById('action-center-app').innerHTML = \`
@@ -935,6 +957,22 @@ if (IS_ACTION_CENTER) {
       </section>
       \` : ''}
 
+      \${nul ? \`
+      <section class="acc-orange">
+        <div class="section-head">
+          <div class="sec-title"><div class="badge b-orange">&#128176;</div><h2>New Users Lossback</h2><span class="today-tag">\${fmt(nul.eligible_count)}</span></div>
+          <button class="download-btn-sm" id="btn-dl-new-users-lossback">&#128190; Excel</button>
+        </div>
+        <div class="reactivation-highlight">
+          <div class="rh-count">\${fmt(nul.eligible_count)}<small>Eligible Users</small></div>
+          <div class="rh-pct">\${money(nul.total_reward)}<small>Total Reward Payable</small></div>
+        </div>
+        <div class="ac-note">Today's first-time depositors only &middot; no withdrawal applied today (any status) &middot; wallet balance &le;10% of today's deposit: 20% reward &middot; balance &gt;10%-20%: 13% reward &middot; balance above 20%: not eligible</div>
+        <div id="new-users-lossback-table"></div>
+        <div class="ac-pagination" id="new-users-lossback-pagination"></div>
+      </section>
+      \` : ''}
+
       \${fdr ? \`
       <section class="acc-orange">
         <div class="section-head">
@@ -958,6 +996,12 @@ if (IS_ACTION_CENTER) {
       paginatedTable('cashback-table', 'cashback-pagination', wcs.rows, cashbackCols, 6, { jumpDropdown: true });
       document.getElementById('btn-dl-cashback').addEventListener('click', () =>
         downloadExcel(wcs.rows, cashbackCols, 'Weekly Cashback Shield', 'weekly-cashback-shield-' + wcs.week_start + '.xlsx'));
+    }
+
+    if (nul) {
+      paginatedTable('new-users-lossback-table', 'new-users-lossback-pagination', nul.rows, newUsersLossbackCols, 6, { jumpDropdown: true });
+      document.getElementById('btn-dl-new-users-lossback').addEventListener('click', () =>
+        downloadExcel(nul.rows, newUsersLossbackCols, 'New Users Lossback', 'new-users-lossback-' + nul.date + '.xlsx'));
     }
 
     paginatedTable('near-low-table', 'near-low-pagination', ac.near_upgrade_low.rows, nearCols, 6, { jumpDropdown: true });

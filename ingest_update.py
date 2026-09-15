@@ -483,6 +483,15 @@ def classify_bonus(game_name, source, source_id):
                 return normalized
         return source_id or game_name
 
+    # New Users Lossback payout wrapper label -- real identity lives in
+    # source_id, which starts with some casing of "New Users Lossback"
+    # plus a per-instance suffix, normalized the same way Weekly Loss
+    # Bonus is so every instance rolls up into one category.
+    if game_name == "04Siya Import Excel Add":
+        if source_id.lower().startswith("new users lossback"):
+            return "New Users Lossback"
+        return source_id or game_name
+
     if game_name and not source:
         return game_name
 
@@ -527,7 +536,7 @@ def classify_bonus(game_name, source, source_id):
 # under the new rules, then fall back to only scanning genuinely new rows.
 # Without this, a rule change would only apply to rows inserted AFTER the
 # change; existing rows that now match would silently stay unclassified.
-CLASSIFY_BONUS_RULES_VERSION = 5
+CLASSIFY_BONUS_RULES_VERSION = 6
 
 
 def stable_wallet_id(raw_id, create_time):
@@ -623,6 +632,30 @@ def ingest_wallet(files):
         "WHERE matched_category LIKE 'Weekly Loss Bonus%' AND matched_category != 'Weekly Loss Bonus'"
     )
     conn.commit()
+
+    # Retroactive cleanup: rows with game_name "04Siya Import Excel Add"
+    # ingested before classify_bonus() had a rule for it fell through to
+    # the generic "game_name and not source" rule and got stuck with the
+    # literal wrapper label as their matched_category forever -- same
+    # "backfill only touches rows with no bonuses entry yet" blind spot as
+    # the Weekly Loss Bonus cleanup above. Re-classifies by joining back to
+    # wallet_transactions for the real source_id. Safe to run every time
+    # (a no-op once none remain wrongly tagged).
+    mis_wrapped = cur.execute(
+        "SELECT b.id, w.game_name, w.source, w.source_id FROM bonuses b "
+        "JOIN wallet_transactions w ON w.id = b.id "
+        "WHERE b.matched_category = '04Siya Import Excel Add'"
+    ).fetchall()
+    fixed = 0
+    for bonus_id, game_name, source, source_id in mis_wrapped:
+        matched = classify_bonus(game_name, source, source_id)
+        if matched and matched != "04Siya Import Excel Add":
+            cur.execute("UPDATE bonuses SET matched_category = ? WHERE id = ?", (matched, bonus_id))
+            fixed += 1
+    if fixed:
+        conn.commit()
+        print(f"  re-classified {fixed} previously-mis-tagged '04Siya Import Excel Add' rows")
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_bonus_user ON bonuses(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_bonus_name ON bonuses(bonus_name)")
     added = 0

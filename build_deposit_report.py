@@ -2756,6 +2756,94 @@ def weekly_cashback_week_range(now):
     return week_start, week_end
 
 
+NEW_USER_LOSSBACK_TIER1_MAX_PCT = 10.0
+NEW_USER_LOSSBACK_TIER1_REWARD_PCT = 0.20
+NEW_USER_LOSSBACK_TIER2_MAX_PCT = 20.0
+NEW_USER_LOSSBACK_TIER2_REWARD_PCT = 0.13
+
+
+def new_user_lossback_reward_pct(balance_pct):
+    """Returns the reward rate for this balance-as-%-of-todays-deposit, or
+    None if not eligible (above the top tier)."""
+    if balance_pct <= NEW_USER_LOSSBACK_TIER1_MAX_PCT:
+        return NEW_USER_LOSSBACK_TIER1_REWARD_PCT
+    if balance_pct <= NEW_USER_LOSSBACK_TIER2_MAX_PCT:
+        return NEW_USER_LOSSBACK_TIER2_REWARD_PCT
+    return None
+
+
+def new_users_lossback(mconn, deposit_rows, withdrawal_rows, agent_by_user, today):
+    """Second Action Center section under Weekly Cashback Shield: TODAY's
+    first-time depositors (source system's own is_first_deposit flag, same
+    authoritative-over-33-day-retention reasoning as
+    yesterday_first_deposit_users) who have NOT applied for any withdrawal
+    today -- ANY withdrawal request today, regardless of status,
+    disqualifies them, since even a Rejected/Failed attempt means they
+    already tried to cash out. Reward tiers are keyed off their CURRENT
+    wallet balance as a percentage of what they deposited today (see
+    new_user_lossback_reward_pct). One-time only, same-day check."""
+    withdrew_today = set()
+    for withdraw_amount, create_time, status, user_id, *_rest in withdrawal_rows:
+        if user_id is None:
+            continue
+        dt = parse_dt(create_time)
+        if dt and dt.date() == today:
+            withdrew_today.add(user_id)
+
+    day_stats = defaultdict(lambda: {"count": 0, "amount": 0.0})
+    first_deposit_users = set()
+    for pay_channel, order_amount, create_time, update_time, status, user_id, is_first_deposit in deposit_rows:
+        if status != "COMPLETE" or user_id is None:
+            continue
+        dt = parse_dt(create_time)
+        if not dt or dt.date() != today:
+            continue
+        entry = day_stats[user_id]
+        entry["count"] += 1
+        entry["amount"] += order_amount or 0.0
+        if is_first_deposit == 1:
+            first_deposit_users.add(user_id)
+
+    candidates = first_deposit_users - withdrew_today
+    vip_by_user, balance_by_user = {}, {}
+    if candidates:
+        placeholders = ",".join("?" * len(candidates))
+        for uid, vip, bal in mconn.execute(
+            f"SELECT user_id, vip_level, user_balance FROM users WHERE user_id IN ({placeholders})", list(candidates)
+        ).fetchall():
+            vip_by_user[uid] = vip
+            balance_by_user[uid] = bal or 0.0
+
+    rows = []
+    for user_id in candidates:
+        total_deposit = round(day_stats[user_id]["amount"], 2)
+        if total_deposit <= 0:
+            continue
+        balance = round(balance_by_user.get(user_id, 0.0), 2)
+        balance_pct = balance / total_deposit * 100
+        reward_pct = new_user_lossback_reward_pct(balance_pct)
+        if reward_pct is None:
+            continue
+        rows.append({
+            "user_id": user_id,
+            "agent": agent_for(agent_by_user, user_id),
+            "vip_level": vip_by_user.get(user_id),
+            "total_deposit": total_deposit,
+            "wallet_balance": balance,
+            "balance_pct": round(balance_pct, 2),
+            "reward_pct": round(reward_pct * 100, 2),
+            "reward_amount": round(total_deposit * reward_pct, 2),
+        })
+    rows.sort(key=lambda r: -r["reward_amount"])
+
+    return {
+        "date": today.isoformat(),
+        "eligible_count": len(rows),
+        "total_reward": round(sum(r["reward_amount"] for r in rows), 2),
+        "rows": rows,
+    }
+
+
 def fd_users_retention_report(report_daily_db_path, deposit_rows, withdrawal_rows, now):
     """Action Center summary card: YESTERDAY's first-time depositors
     (is_first_deposit flag) -- total deposit, total bonus credited to them
@@ -3228,6 +3316,7 @@ def main():
     agent_by_user = {}
     action_center = None
     weekly_cashback = None
+    new_users_lossback_report = None
     fd_retention_report = None
     reactivation = None
     vip_upgrade = None
@@ -3251,6 +3340,7 @@ def main():
         agent_by_user = {int(uid): name for uid, name in raw_agent_map.items() if int(uid) not in banned_id_set}
         action_center = action_center_reports(mconn, now, agent_by_user)
         weekly_cashback = weekly_cashback_shield(mconn, deposit_rows, withdrawal_rows, agent_by_user, now)
+        new_users_lossback_report = new_users_lossback(mconn, deposit_rows, withdrawal_rows, agent_by_user, now.date())
         fd_retention_report = fd_users_retention_report(report_daily_db_path, deposit_rows, withdrawal_rows, now)
         fallback_creds = load_creds()
         reactivation_candidates_path = os.path.join(BASE, "reactivation_candidates.json")
@@ -3592,6 +3682,7 @@ def main():
         "action_center": action_center,
         "action_center_extra": action_center_extra,
         "weekly_cashback_shield": weekly_cashback,
+        "new_users_lossback": new_users_lossback_report,
         "top_withdrawers": top_withdrawer_rows,
         "fd_retention_report": fd_retention_report,
         "region_vip_analytics": region_vip_analytics_data,
