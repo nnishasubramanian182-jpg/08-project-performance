@@ -822,6 +822,7 @@ if (IS_ACTION_CENTER) {
       { label: 'Bonus Amount', render: r => money(r.bonus_amount), raw: r => r.bonus_amount, num: true },
     ];
     const wcs = data.weekly_cashback_shield;
+    const fdr = data.fd_retention_report;
 
     document.getElementById('action-center-app').innerHTML = \`
       \${acx ? \`
@@ -928,6 +929,24 @@ if (IS_ACTION_CENTER) {
         <div class="ac-note">VIP 2+ only &middot; Loss Rs 500-4,999 (80%+ of week's deposit lost): flat 1.5% &middot; Loss Rs 5,000-2,500,000: 50%-100%+ loss scales cashback -- VIP 2-4: 2.00%-4.00%, VIP 5-15: 1.51%-5.00% &middot; credited Sunday morning, no wagering requirement</div>
         <div id="cashback-table"></div>
         <div class="ac-pagination" id="cashback-pagination"></div>
+      </section>
+      \` : ''}
+
+      \${fdr ? \`
+      <section class="acc-orange">
+        <div class="section-head">
+          <div class="sec-title"><div class="badge b-orange">&#128202;</div><h2>FD Users Retention</h2><span class="today-tag">\${shortDate(fdr.date)}</span></div>
+        </div>
+        <div class="reactivation-highlight">
+          <div class="rh-count">\${fmt(fdr.fd_users)}<small>1st Deposit Users</small></div>
+          <div class="rh-pct">\${money(fdr.total_deposit)}<small>Total Deposit</small></div>
+          <div class="rh-pct">\${fmt(fdr.bonus_added_users)}<small>Bonus Added Users</small></div>
+          <div class="rh-pct">\${money(fdr.total_bonus)}<small>Total Bonus</small></div>
+          <div class="rh-pct">\${fmt(fdr.bonus_utilised_users)} (\${fdr.bonus_utilised_pct}%)<small>Bonus Utilised</small></div>
+          <div class="rh-pct">\${fmt(fdr.second_deposit_same_day)} (\${fdr.second_deposit_pct}%)<small>2nd Deposit Same Day</small></div>
+          <div class="rh-pct">\${fmt(fdr.withdraw_same_day_users)} (\${fdr.withdraw_same_day_pct}%)<small>Withdrawal Same Day</small></div>
+        </div>
+        <div class="ac-note">Yesterday's first-time depositors only &middot; Bonus Utilised = placed at least one bet after the bonus was credited, same day &middot; all conversions are against 1st Deposit Users</div>
       </section>
       \` : ''}
     \`;

@@ -21,6 +21,57 @@ const UPLOAD_FORM = `<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="pwModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:8px;padding:20px;width:320px;max-width:90vw;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+    <div id="pwModalLabel" style="font-size:14px;font-weight:600;margin-bottom:12px;color:#222;"></div>
+    <input type="password" id="pwModalInput" style="width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:13px;box-sizing:border-box;" autocomplete="off">
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
+      <button id="pwModalCancel" type="button" style="background:#eee;color:#333;border:none;padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;">Cancel</button>
+      <button id="pwModalOk" type="button" style="background:#4f46e5;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;">OK</button>
+    </div>
+  </div>
+</div>
+<script>
+// Real DOM-based replacement for window.prompt() -- native prompt()/alert()/
+// confirm() dialogs are blocked or unsupported in a number of real browser
+// contexts (in-app/embedded webviews, some mobile browsers, sandboxed
+// iframes), and critically fail SILENTLY with no visible error when they
+// are: prompt() just throws, and since every call site here was a bare
+// prompt(...) outside any try/catch, that exception went straight to an
+// uncaught promise rejection -- the button click appeared to do nothing at
+// all, no password box, no error message. This function never touches a
+// native dialog, so it works the same way in every browser/context.
+function askPassword(label) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('pwModal');
+    const labelEl = document.getElementById('pwModalLabel');
+    const input = document.getElementById('pwModalInput');
+    const okBtn = document.getElementById('pwModalOk');
+    const cancelBtn = document.getElementById('pwModalCancel');
+    labelEl.textContent = label;
+    input.value = '';
+    modal.style.display = 'flex';
+    input.focus();
+
+    function cleanup(result) {
+      modal.style.display = 'none';
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+      resolve(result);
+    }
+    function onOk() { cleanup(input.value); }
+    function onCancel() { cleanup(null); }
+    function onKeydown(e) {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
+}
+</script>
 <h1>Master Userlist &mdash; Data Upload</h1>
 <p>Upload one or more exports and they'll be ingested automatically into Master Userlist / Daily Records. Files upload directly to storage, so there's no size limit.</p>
 <ul>
@@ -62,7 +113,7 @@ const UPLOAD_FORM = `<!DOCTYPE html>
 
 <script>
 document.getElementById('triggerPipelineBtn').addEventListener('click', async () => {
-  const password = prompt('Enter password to trigger a manual pipeline run:');
+  const password = await askPassword('Enter password to trigger a manual pipeline run:');
   if (password === null) return;
   const btn = document.getElementById('triggerPipelineBtn');
   const msg = document.getElementById('triggerPipelineMsg');
@@ -106,7 +157,7 @@ document.getElementById('addAgentsBtn').addEventListener('click', async () => {
     msg.className = 'err';
     return;
   }
-  const password = prompt('Enter password to add ' + names.length + ' agent(s):');
+  const password = await askPassword('Enter password to add ' + names.length + ' agent(s):');
   if (password === null) return;
   btn.disabled = true;
   msg.textContent = 'Adding...';
@@ -176,7 +227,7 @@ async function loadAgentLogins() {
 }
 
 async function changeAgentPassword(agent) {
-  const newPassword = prompt('New password for ' + agent + ':');
+  const newPassword = await askPassword('New password for ' + agent + ':');
   if (!newPassword) return;
   const msg = document.getElementById('agentLoginsMsg');
   msg.textContent = 'Saving...';
@@ -199,7 +250,7 @@ async function changeAgentPassword(agent) {
 }
 
 document.getElementById('agentLoginsBtn').addEventListener('click', async () => {
-  const password = prompt('Enter password to view agent logins:');
+  const password = await askPassword('Enter password to view agent logins:');
   if (password === null) return;
   adminActionPassword = password;
   await loadAgentLogins();
@@ -231,7 +282,7 @@ document.getElementById('tokenForm').addEventListener('submit', async (e) => {
     msg.className = 'err';
     return;
   }
-  const password = prompt('Enter password to update the API token:');
+  const password = await askPassword('Enter password to update the API token:');
   if (password === null) return;
   btn.disabled = true;
   msg.textContent = 'Saving...';
