@@ -1,8 +1,7 @@
-"""One-off read-only diagnostic: pin down exactly which wallet_transactions
-columns (game_name/source/source_id) produce the fragmented
-VIP_DAILY_RECHARGE_CASHBACK matched_category rows in bonuses, since the
-raw LIKE filter against wallet_transactions.source_id doesn't reconcile
-with the row count already found in bonuses.
+"""One-off read-only diagnostic: inspect the actual game_name/source/
+source_id shape of GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD rows (08-project's
+own New Users Lossback bonus) before writing a classify_bonus() rule for
+it, and check its current classification state in the bonuses table.
 
 Usage: python3 bonus_classification_audit.py
 """
@@ -34,33 +33,43 @@ def main():
     conn = sqlite3.connect(DAILY_DB)
     cur = conn.cursor()
 
-    print("\n=== bonuses rows matching the fragmented family, joined to wallet_transactions ===")
+    print("\n=== wallet_transactions rows with GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD anywhere ===")
     rows = cur.execute(
-        "SELECT b.id, b.matched_category, w.game_name, w.source, w.source_id, w.direction "
-        "FROM bonuses b LEFT JOIN wallet_transactions w ON w.id = b.id "
-        "WHERE b.matched_category LIKE 'VIP_DAILY_RECHARGE_CASHBACK%' LIMIT 20"
+        "SELECT id, game_name, source, source_id, direction, change_value FROM wallet_transactions "
+        "WHERE source_id LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "OR game_name LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "LIMIT 20"
     ).fetchall()
     for r in rows:
         print(f"  {r}")
-
-    print("\n=== Are the corresponding wallet_transactions rows still present? ===")
-    missing = cur.execute(
-        "SELECT COUNT(*) FROM bonuses b WHERE b.matched_category LIKE 'VIP_DAILY_RECHARGE_CASHBACK%' "
-        "AND b.id NOT IN (SELECT id FROM wallet_transactions)"
-    ).fetchone()[0]
-    present = cur.execute(
-        "SELECT COUNT(*) FROM bonuses b WHERE b.matched_category LIKE 'VIP_DAILY_RECHARGE_CASHBACK%' "
-        "AND b.id IN (SELECT id FROM wallet_transactions)"
-    ).fetchone()[0]
-    print(f"orphaned (wallet_transactions row gone): {missing}")
-    print(f"still present: {present}")
-
-    print("\n=== bonuses date range for this family ===")
-    date_range = cur.execute(
-        "SELECT MIN(create_time), MAX(create_time), COUNT(*) FROM bonuses "
-        "WHERE matched_category LIKE 'VIP_DAILY_RECHARGE_CASHBACK%'"
+    total = cur.execute(
+        "SELECT COUNT(*), SUM(change_value) FROM wallet_transactions "
+        "WHERE source_id LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "OR game_name LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\'"
     ).fetchone()
-    print(f"  {date_range}")
+    print(f"total rows: {total[0]}, total amount: {total[1]}")
+
+    print("\n=== of those, current classification state in bonuses ===")
+    classified = cur.execute(
+        "SELECT b.matched_category, COUNT(*) FROM bonuses b "
+        "JOIN wallet_transactions w ON w.id = b.id "
+        "WHERE w.source_id LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "OR w.game_name LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "GROUP BY b.matched_category ORDER BY COUNT(*) DESC LIMIT 20"
+    ).fetchall()
+    for r in classified:
+        print(f"  {r}")
+    unclassified = cur.execute(
+        "SELECT COUNT(*) FROM wallet_transactions w "
+        "WHERE (w.source_id LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\' "
+        "OR w.game_name LIKE '%GAME\\_RUMMY\\_DAILY\\_PROFIT\\_LOSS\\_REWARD%' ESCAPE '\\') "
+        "AND w.id NOT IN (SELECT id FROM bonuses)"
+    ).fetchone()[0]
+    print(f"not in bonuses table at all: {unclassified}")
+
+    print("\n=== existing 'New Users Lossback' category state (if any) ===")
+    nul = cur.execute("SELECT COUNT(*), SUM(change_value) FROM bonuses WHERE matched_category = 'New Users Lossback'").fetchone()
+    print(f"  rows: {nul[0]}, total: {nul[1]}")
 
     conn.close()
 

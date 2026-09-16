@@ -483,14 +483,15 @@ def classify_bonus(game_name, source, source_id):
                 return normalized
         return source_id or game_name
 
-    # New Users Lossback payout wrapper label -- real identity lives in
-    # source_id, which starts with some casing of "New Users Lossback"
-    # plus a per-instance suffix, normalized the same way Weekly Loss
-    # Bonus is so every instance rolls up into one category.
-    if game_name == "04Siya Import Excel Add":
-        if source_id.lower().startswith("new users lossback"):
-            return "New Users Lossback"
-        return source_id or game_name
+    # New Users Lossback payout, as this business account's platform
+    # actually labels it -- confirmed 2026-09-16: game_name is the literal
+    # system identifier "GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD" (source_id
+    # further wrapped as "GAME_REWARD:<vip_level>:<user_id>", not needed
+    # since game_name alone is enough to classify). Relabeled to the same
+    # "New Users Lossback" category the New Users Lossback Action Center
+    # report and FD Users Retention's lossback fields already key off of.
+    if game_name == "GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD":
+        return "New Users Lossback"
 
     if game_name and not source:
         return game_name
@@ -536,7 +537,7 @@ def classify_bonus(game_name, source, source_id):
 # under the new rules, then fall back to only scanning genuinely new rows.
 # Without this, a rule change would only apply to rows inserted AFTER the
 # change; existing rows that now match would silently stay unclassified.
-CLASSIFY_BONUS_RULES_VERSION = 6
+CLASSIFY_BONUS_RULES_VERSION = 7
 
 
 def stable_wallet_id(raw_id, create_time):
@@ -653,28 +654,22 @@ def ingest_wallet(files):
     )
     conn.commit()
 
-    # Retroactive cleanup: rows with game_name "04Siya Import Excel Add"
-    # ingested before classify_bonus() had a rule for it fell through to
-    # the generic "game_name and not source" rule and got stuck with the
-    # literal wrapper label as their matched_category forever -- same
-    # "backfill only touches rows with no bonuses entry yet" blind spot as
-    # the Weekly Loss Bonus cleanup above. Re-classifies by joining back to
-    # wallet_transactions for the real source_id. Safe to run every time
-    # (a no-op once none remain wrongly tagged).
-    mis_wrapped = cur.execute(
-        "SELECT b.id, w.game_name, w.source, w.source_id FROM bonuses b "
-        "JOIN wallet_transactions w ON w.id = b.id "
-        "WHERE b.matched_category = '04Siya Import Excel Add'"
-    ).fetchall()
-    fixed = 0
-    for bonus_id, game_name, source, source_id in mis_wrapped:
-        matched = classify_bonus(game_name, source, source_id)
-        if matched and matched != "04Siya Import Excel Add":
-            cur.execute("UPDATE bonuses SET matched_category = ? WHERE id = ?", (matched, bonus_id))
-            fixed += 1
-    if fixed:
-        conn.commit()
-        print(f"  re-classified {fixed} previously-mis-tagged '04Siya Import Excel Add' rows")
+    # Retroactive cleanup: rows ingested before classify_bonus() had a rule
+    # for GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD (this account's New Users
+    # Lossback payout) fell through to the generic "game_name and not
+    # source" rule and got stuck with the raw system identifier as their
+    # matched_category forever -- confirmed 2026-09-16: 10,821 rows, Rs
+    # 341,850 total, invisible to the New Users Lossback claimant tracking
+    # in fd_users_retention_report() since nothing matched that label yet.
+    # Already-classified rows aren't touched by the backfill scan below (it
+    # only looks at rows with no bonuses entry at all), so they need an
+    # explicit one-time merge here. Safe to run every time (a no-op once
+    # merged).
+    cur.execute(
+        "UPDATE bonuses SET matched_category = 'New Users Lossback' "
+        "WHERE matched_category = 'GAME_RUMMY_DAILY_PROFIT_LOSS_REWARD'"
+    )
+    conn.commit()
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_bonus_user ON bonuses(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_bonus_name ON bonuses(bonus_name)")
