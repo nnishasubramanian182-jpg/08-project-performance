@@ -3287,28 +3287,38 @@ def main():
         "SELECT withdraw_amount, create_time, status, user_id, payment_channel, review_time, update_time, order_no, "
         "payment_center_order_id FROM withdrawals"
     ).fetchall()
-    wallet_rows = cur.execute(
-        "SELECT user_id, create_time FROM wallet_transactions WHERE user_id IS NOT NULL"
-    ).fetchall()
+    # Grouped in SQL rather than fetched row-per-transaction and deduped in
+    # Python: by_date_bet_users/all_bet_users only ever need the distinct
+    # (date, user_id) pairs, not every individual bet -- at tens of millions
+    # of wallet_transactions rows, fetchall()-ing one row per transaction
+    # was both slow enough and memory-heavy enough to get the hourly
+    # pipeline's report-refresh step killed/cancelled outright. GROUP BY
+    # collapses this to one row per user per active day before it ever
+    # leaves SQLite.
+    by_date_bet_users = defaultdict(set)
+    all_bet_users = set()
+    for date_str, user_id in cur.execute(
+        "SELECT substr(create_time, 1, 10) AS d, user_id FROM wallet_transactions "
+        "WHERE user_id IS NOT NULL GROUP BY d, user_id"
+    ):
+        all_bet_users.add(user_id)
+        by_date_bet_users[date_str].add(user_id)
+
     # Actual game plays only -- excludes bonus payouts, same definition as
     # build_recent_activity_by_user's "games played" query -- used by
-    # suspicious_withdraw_users() below.
+    # suspicious_withdraw_users() below, which only ever looks at the last 3
+    # days (today and the previous 2), so the query is scoped the same way
+    # rather than pulling the entire 33-day retention window into Python.
+    suspicious_window_start = (now.date() - timedelta(days=2)).isoformat()
     game_play_rows = cur.execute(
         "SELECT user_id, create_time FROM wallet_transactions "
         "WHERE game_name IS NOT NULL AND game_name != '' AND user_id IS NOT NULL "
-        "AND id NOT IN (SELECT id FROM bonuses)"
+        "AND create_time >= ? AND id NOT IN (SELECT id FROM bonuses)",
+        (suspicious_window_start,),
     ).fetchall()
     channel_performance = channel_performance_report(conn, now.date())
     recent_activity = build_recent_activity_by_user(conn, now.date())
     conn.close()
-
-    by_date_bet_users = defaultdict(set)
-    all_bet_users = set()
-    for user_id, create_time in wallet_rows:
-        all_bet_users.add(user_id)
-        create_dt = parse_dt(create_time)
-        if create_dt:
-            by_date_bet_users[create_dt.strftime("%Y-%m-%d")].add(user_id)
 
     total_registered_users = None
     vip_by_user = {}
