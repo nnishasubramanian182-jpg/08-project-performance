@@ -2,13 +2,6 @@ name: Bonus classification audit (one-off diagnostic)
 
 on:
   workflow_dispatch: {}
-  # TEMPORARY one-off trigger: the GitHub Actions "Run workflow" UI button
-  # is not rendering for this repo, and no available credential has write
-  # access to dispatch via the REST API either. `push` needs neither --
-  # revert/remove this workflow right after the one-time run it's here for.
-  push:
-    branches: [main]
-    paths: ["bonus_classification_audit.py"]
 
 concurrency:
   group: db-ingest
