@@ -725,29 +725,53 @@ def ingest_wallet(files):
     last_id_row = cur.execute("SELECT value FROM backfill_state WHERE key = 'last_backfilled_id'").fetchone()
     last_backfilled_id = int(last_id_row[0]) if last_id_row else 0
 
+    # Streamed via a dedicated cursor (never fetchall()'d) and batched in
+    # chunks of BACKFILL_BATCH -- a full re-scan (triggered whenever
+    # CLASSIFY_BONUS_RULES_VERSION changes) candidates the vast majority of
+    # a 60M+ row table, and materializing that into one Python list plus
+    # a second `backfilled` list was enough to get the runner OOM-killed
+    # (confirmed 2026-09-16, "Pull and ingest" killed with exit 143 on the
+    # very next run after a version bump). LEFT JOIN ... WHERE b.id IS
+    # NULL replaces the NOT IN subquery too -- SQLite can drive that off
+    # bonuses' own PRIMARY KEY index instead of re-evaluating the subquery
+    # per row.
+    BACKFILL_BATCH = 5000
+    scan_cur = conn.cursor()
     if stored_version != CLASSIFY_BONUS_RULES_VERSION:
         print(f"Bonus classify rules changed ({stored_version} -> {CLASSIFY_BONUS_RULES_VERSION}) or first run with watermarking -- full backfill re-scan")
-        backfill_rows = cur.execute(
-            "SELECT id, game_name, user_id, change_value, change_after, create_time, source, source_id "
-            "FROM wallet_transactions WHERE id NOT IN (SELECT id FROM bonuses)"
-        ).fetchall()
+        scan_cur.execute(
+            "SELECT w.id, w.game_name, w.user_id, w.change_value, w.change_after, w.create_time, w.source, w.source_id "
+            "FROM wallet_transactions w LEFT JOIN bonuses b ON b.id = w.id WHERE b.id IS NULL"
+        )
     else:
-        backfill_rows = cur.execute(
-            "SELECT id, game_name, user_id, change_value, change_after, create_time, source, source_id "
-            "FROM wallet_transactions WHERE id > ? AND id NOT IN (SELECT id FROM bonuses)",
+        scan_cur.execute(
+            "SELECT w.id, w.game_name, w.user_id, w.change_value, w.change_after, w.create_time, w.source, w.source_id "
+            "FROM wallet_transactions w LEFT JOIN bonuses b ON b.id = w.id WHERE w.id > ? AND b.id IS NULL",
             (last_backfilled_id,),
-        ).fetchall()
+        )
 
-    backfilled = []
-    for _id, game_name, user_id, change_value, change_after, create_time, source, source_id in backfill_rows:
+    scanned = 0
+    matched_count = 0
+    batch = []
+    for _id, game_name, user_id, change_value, change_after, create_time, source, source_id in scan_cur:
+        scanned += 1
         matched = classify_bonus(game_name, source, source_id)
         if matched:
-            backfilled.append((_id, user_id, game_name, matched, change_value, change_after, create_time, source))
-    if backfilled:
+            batch.append((_id, user_id, game_name, matched, change_value, change_after, create_time, source))
+            if len(batch) >= BACKFILL_BATCH:
+                cur.executemany(
+                    "INSERT OR IGNORE INTO bonuses (id, user_id, bonus_name, matched_category, change_value, change_after, create_time, source) VALUES (?,?,?,?,?,?,?,?)",
+                    batch,
+                )
+                conn.commit()
+                matched_count += len(batch)
+                batch = []
+    if batch:
         cur.executemany(
             "INSERT OR IGNORE INTO bonuses (id, user_id, bonus_name, matched_category, change_value, change_after, create_time, source) VALUES (?,?,?,?,?,?,?,?)",
-            backfilled,
+            batch,
         )
+        matched_count += len(batch)
 
     new_max_id = cur.execute("SELECT MAX(id) FROM wallet_transactions").fetchone()[0] or last_backfilled_id
     cur.execute(
@@ -759,7 +783,7 @@ def ingest_wallet(files):
         (str(new_max_id),),
     )
     conn.commit()
-    print(f"Bonus backfill: {len(backfilled)} previously-missed rows classified as bonuses (scanned {len(backfill_rows)} candidates)")
+    print(f"Bonus backfill: {matched_count} previously-missed rows classified as bonuses (scanned {scanned} candidates)")
     conn.close()
 
 
