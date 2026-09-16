@@ -2,13 +2,6 @@ name: Refresh deposit report only (no business API pull)
 
 on:
   workflow_dispatch: {}
-  # TEMPORARY one-off trigger: the GitHub Actions "Run workflow" UI button
-  # is not rendering for this repo, and no available credential has write
-  # access to dispatch via the REST API either. `push` needs neither --
-  # revert this block right after the one-time run it's here for.
-  push:
-    branches: [main]
-    paths: [".github/workflows/refresh_report_only.yml"]
 
 concurrency:
   group: db-ingest
