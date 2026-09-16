@@ -633,6 +633,26 @@ def ingest_wallet(files):
     )
     conn.commit()
 
+    # Retroactive cleanup: rows classified under the raw source_id
+    # "VIP_DAILY_RECHARGE_CASHBACK:<vip_level>:<date>:<user_id>" instead of
+    # the clean "VIP Daily Recharge Cashback" label -- confirmed 2026-09-16:
+    # 12,488 distinct raw matched_category values (one per instance) vs.
+    # game_name being consistently populated with the clean label for every
+    # one of these rows, meaning classify_bonus() rule 1 ("game_name and
+    # not source: return game_name") already classifies this correctly
+    # going forward; these are purely historical rows from before that was
+    # true, stuck with the raw value since already-classified rows aren't
+    # touched by the backfill scan below. LIKE with ESCAPE treats the
+    # underscores in the source literally (plain LIKE '_' is a wildcard and
+    # would silently match unrelated categories too). Safe to run every
+    # time (a no-op once merged).
+    cur.execute(
+        "UPDATE bonuses SET matched_category = 'VIP Daily Recharge Cashback' "
+        "WHERE matched_category LIKE 'VIP\\_DAILY\\_RECHARGE\\_CASHBACK%' ESCAPE '\\' "
+        "AND matched_category != 'VIP Daily Recharge Cashback'"
+    )
+    conn.commit()
+
     # Retroactive cleanup: rows with game_name "04Siya Import Excel Add"
     # ingested before classify_bonus() had a rule for it fell through to
     # the generic "game_name and not source" rule and got stuck with the
