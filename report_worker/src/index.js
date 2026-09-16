@@ -12,7 +12,13 @@ const PAGE = `<!DOCTYPE html>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #eef1f6; color: #1a1a1a; }
   .wrap { max-width: 1400px; margin: 0 auto; padding: 0 24px 40px; }
 
-  .hero { background: linear-gradient(120deg, #4338ca 0%, #6d28d9 45%, #7c3aed 100%); color: #fff; padding: 28px 24px; margin-bottom: 24px; }
+  .hero { background: linear-gradient(120deg, #4338ca 0%, #6d28d9 45%, #7c3aed 100%); color: #fff; padding: 28px 24px; margin-bottom: 24px; position: relative; }
+  .lang-switch { position: absolute; top: 20px; right: 24px; background: rgba(255,255,255,0.16); color: #fff; border: 1px solid rgba(255,255,255,0.35); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; }
+  .lang-switch:hover { background: rgba(255,255,255,0.28); }
+  #google_translate_element { display: none; }
+  .goog-te-banner-frame, .goog-tooltip, .goog-tooltip:hover, #goog-gt-tt, .goog-te-balloon-frame { display: none !important; }
+  body { top: 0 !important; }
+  .goog-text-highlight { background: none !important; box-shadow: none !important; }
   .hero .wrap { padding: 0 24px; }
   .hero h1 { font-size: 24px; margin: 0 0 6px; font-weight: 700; letter-spacing: -0.01em; }
   .hero .updated { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.14); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; }
@@ -354,6 +360,8 @@ const PAGE = `<!DOCTYPE html>
 </head>
 <body>
 <div class="hero">
+  <a href="#" class="lang-switch" id="lang-switch">中文</a>
+  <div id="google_translate_element"></div>
   <div class="wrap">
     <h1>Project 08 &mdash; Performance &amp; Analysis</h1>
     <div class="updated" id="updated-badge"><span class="dot"></span> Loading&hellip;</div>
@@ -401,6 +409,75 @@ const PAGE = `<!DOCTYPE html>
 </div>
 
 <script>
+// Chinese translation layer, via Google's Website Translator widget --
+// covers every string on the page automatically (including free-form
+// explanatory notes a hand-built dictionary would need constant upkeep
+// for), rather than a maintained EN->ZH dictionary keyed to this file's
+// hardcoded label/title strings.
+//
+// Google's widget translates the DOM indiscriminately, so table DATA
+// (user IDs, agent names, city names, bonus category values) would get
+// mistranslated right along with the UI chrome unless explicitly excluded.
+// Marking every scattered <td> call site with a notranslate attribute
+// individually would be an error-prone, large-surface-area retrofit --
+// instead this uses a DOM-walk-after-render + MutationObserver pattern to
+// mark <td> elements translate="no" programmatically, so no existing
+// render code needs to change. Runs unconditionally (not just once
+// Chinese is selected) so cells are protected before Google's scanner
+// ever sees the page.
+let LANG = localStorage.getItem('dashLang') || 'en';
+
+function protectDataCells(root) {
+  const cells = [];
+  if (root.tagName === 'TD') cells.push(root);
+  if (root.querySelectorAll) cells.push(...root.querySelectorAll('td'));
+  for (const td of cells) td.setAttribute('translate', 'no');
+}
+
+protectDataCells(document.body);
+new MutationObserver(mutations => {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.nodeType === 1) protectDataCells(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+function googleTranslateElementInit() {
+  new google.translate.TranslateElement(
+    { pageLanguage: 'en', includedLanguages: 'zh-CN', autoDisplay: false },
+    'google_translate_element'
+  );
+  if (LANG === 'zh') setGoogleTranslateLanguage('zh-CN');
+}
+
+function setGoogleTranslateLanguage(lang) {
+  const select = document.querySelector('select.goog-te-combo');
+  if (!select) { setTimeout(() => setGoogleTranslateLanguage(lang), 300); return; }
+  select.value = lang;
+  select.dispatchEvent(new Event('change'));
+}
+
+function initLanguage() {
+  const script = document.createElement('script');
+  script.src = '//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
+  document.head.appendChild(script);
+
+  const link = document.getElementById('lang-switch');
+  if (!link) return;
+  link.textContent = LANG === 'zh' ? 'English' : '中文';
+  if (LANG === 'zh') document.documentElement.lang = 'zh-CN';
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    const next = LANG === 'zh' ? 'en' : 'zh';
+    localStorage.setItem('dashLang', next);
+    setGoogleTranslateLanguage(next === 'zh' ? 'zh-CN' : 'en');
+    link.textContent = next === 'zh' ? 'English' : '中文';
+    LANG = next;
+  });
+}
+initLanguage();
+
 function fmt(n) { return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
 function money(n) { return '₹' + fmt(n); }
 
