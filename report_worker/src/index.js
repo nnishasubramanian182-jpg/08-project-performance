@@ -986,8 +986,12 @@ if (IS_ACTION_CENTER) {
           <div class="rh-pct">\${fmt(fdr.bonus_utilised_users)} (\${fdr.bonus_utilised_pct}%)<small>Bonus Utilised</small></div>
           <div class="rh-pct">\${fmt(fdr.second_deposit_same_day)} (\${fdr.second_deposit_pct}%)<small>2nd Deposit Same Day</small></div>
           <div class="rh-pct">\${fmt(fdr.withdraw_same_day_users)} (\${fdr.withdraw_same_day_pct}%)<small>Withdrawal Same Day</small></div>
+          <div class="rh-pct">\${money(fdr.lossback_amount)} (\${fdr.lossback_pct_of_total_bonus}%)<small>New Users Lossback Amount</small></div>
+          <div class="rh-pct">\${fmt(fdr.lossback_claimed_users)}<small>New Users Lossback Claimed</small></div>
+          <div class="rh-pct">\${fmt(fdr.lossback_then_deposited_users)} (\${fdr.lossback_then_deposited_pct}%)<small>Deposited After Lossback</small></div>
+          <div class="rh-pct">\${fmt(fdr.lossback_utilised_users)} (\${fdr.lossback_utilised_pct}%)<small>Lossback Utilised</small></div>
         </div>
-        <div class="ac-note">Yesterday's first-time depositors only &middot; Bonus Utilised = placed at least one bet after the bonus was credited, same day &middot; all conversions are against 1st Deposit Users</div>
+        <div class="ac-note">Yesterday's first-time depositors only &middot; Bonus Utilised = placed at least one bet after the bonus was credited, same day &middot; New Users Lossback Amount's % is its share of Total Bonus &middot; Deposited After Lossback = of those who claimed New Users Lossback, made another completed deposit afterward, same day &middot; Lossback Utilised = of those who claimed New Users Lossback, placed at least one bet (from wallet records) after it was credited, same day &middot; all other conversions are against 1st Deposit Users (Deposited After Lossback and Lossback Utilised are against New Users Lossback Claimed)</div>
       </section>
       \` : ''}
     \`;

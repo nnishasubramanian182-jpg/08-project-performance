@@ -2851,11 +2851,11 @@ def fd_users_retention_report(report_daily_db_path, deposit_rows, withdrawal_row
     wallet_transactions direction=1 -- any time after their bonus was
     credited, same day, rather than just having it sit unused or being
     withdrawn untouched), how many made a 2nd deposit the same day, and how
-    many applied for a withdrawal the same day. "Yesterday" is computed
-    against `now` (already normalized to IST by the caller), so this is
-    always a fully-closed day, never a still-in-progress one. Ported from
-    the reference project's regular hourly pipeline so it's always fresh
-    without needing a separate cron or manual trigger."""
+    many applied for a withdrawal the same day. Also tracks New Users
+    Lossback specifically: of the FD users who claimed that bonus, how many
+    made another completed deposit afterward that same day. "Yesterday" is
+    computed against `now` (already normalized to IST by the caller), so
+    this is always a fully-closed day, never a still-in-progress one."""
     yesterday = (now - timedelta(days=1)).date()
     y_str = yesterday.isoformat()
 
@@ -2918,6 +2918,51 @@ def fd_users_retention_report(report_daily_db_path, deposit_rows, withdrawal_row
         ).fetchall():
             withdraw_same_day_users.add(user_id)
 
+    # New Users Lossback claimants who then deposited again -- of the FD
+    # users who specifically claimed the "New Users Lossback" bonus
+    # (matched_category set by classify_bonus()'s "04Siya Import Excel Add"
+    # rule), how many made ANOTHER completed deposit afterward, same day
+    # (Lossback is a same-day-only feature, so a later day's deposit
+    # wouldn't be a response to it).
+    lossback_first_credit = {}
+    lossback_amount = 0.0
+    if fd_user_ids:
+        placeholders = ",".join("?" * len(fd_user_ids))
+        for user_id, first_credit, credited_amount in cur.execute(
+            f"SELECT user_id, MIN(create_time), SUM(change_value) FROM bonuses "
+            f"WHERE user_id IN ({placeholders}) AND matched_category = 'New Users Lossback' "
+            f"AND substr(create_time, 1, 10) = ? GROUP BY user_id",
+            list(fd_user_ids) + [y_str],
+        ).fetchall():
+            lossback_first_credit[user_id] = first_credit
+            lossback_amount += credited_amount or 0.0
+    lossback_claimed_users = len(lossback_first_credit)
+
+    lossback_then_deposited_users = 0
+    for user_id, credit_time in lossback_first_credit.items():
+        row = cur.execute(
+            "SELECT 1 FROM deposits WHERE user_id = ? AND status = 'COMPLETE' "
+            "AND create_time > ? AND substr(create_time, 1, 10) = ? LIMIT 1",
+            (user_id, credit_time, y_str),
+        ).fetchone()
+        if row:
+            lossback_then_deposited_users += 1
+
+    # New Users Lossback utilisation specifically -- same "placed a bet
+    # (wallet_transactions direction=1) after the credit, same day" check
+    # as bonus_utilised_users above, but scoped to lossback claimants only
+    # rather than all bonus recipients, since a user could have a Welcome
+    # Back Bonus (say) they used but never touch their Lossback credit.
+    lossback_utilised_users = 0
+    for user_id, credit_time in lossback_first_credit.items():
+        row = cur.execute(
+            "SELECT 1 FROM wallet_transactions "
+            "WHERE user_id = ? AND direction = 1 AND create_time > ? AND substr(create_time, 1, 10) = ? LIMIT 1",
+            (user_id, credit_time, y_str),
+        ).fetchone()
+        if row:
+            lossback_utilised_users += 1
+
     conn.close()
 
     def pct(n):
@@ -2935,6 +2980,13 @@ def fd_users_retention_report(report_daily_db_path, deposit_rows, withdrawal_row
         "second_deposit_pct": pct(second_deposit_same_day),
         "withdraw_same_day_users": len(withdraw_same_day_users),
         "withdraw_same_day_pct": pct(len(withdraw_same_day_users)),
+        "lossback_amount": round(lossback_amount, 2),
+        "lossback_pct_of_total_bonus": round(lossback_amount / total_bonus * 100, 2) if total_bonus else 0.0,
+        "lossback_claimed_users": lossback_claimed_users,
+        "lossback_then_deposited_users": lossback_then_deposited_users,
+        "lossback_then_deposited_pct": round(lossback_then_deposited_users / lossback_claimed_users * 100, 2) if lossback_claimed_users else 0.0,
+        "lossback_utilised_users": lossback_utilised_users,
+        "lossback_utilised_pct": round(lossback_utilised_users / lossback_claimed_users * 100, 2) if lossback_claimed_users else 0.0,
     }
 
 
