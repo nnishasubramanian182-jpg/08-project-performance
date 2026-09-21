@@ -831,10 +831,33 @@ def main():
         wallet_path = save_xlsx(wallet_bytes, f"{ts}_detail_api_pull.xlsx")
         print(f"Fetched wallet {wallet_target}: {len(wallet_bytes)} bytes")
     except Exception as e:
-        # Every export uses the same bearer token, so any unrecoverable fetch failure
-        # here is treated as an expired/invalid token -- surfaced on the upload page.
-        put_token_status(s3, bucket, ok=False, message="update new bearer token to run the pipeline")
-        print(f"FATAL: business API fetch failed, marking token as invalid: {e}", file=sys.stderr)
+        # Confirmed 2026-09-21: a 524 (Cloudflare gateway timeout on the
+        # business API's own origin server) during detail/export was
+        # getting caught here and blanket-marked as an invalid token --
+        # every unrecoverable fetch failure used to be treated as an
+        # expired/invalid token, regardless of cause. That's wrong for
+        # 5xx/network-level failures (the server is just slow or down,
+        # nothing wrong with the token) and would also make the next
+        # scheduled run skip itself entirely (see worker's
+        # runPullIfTokenOk(), which checks this same status before
+        # dispatching), compounding one transient timeout into an
+        # extended outage. A genuine auth failure surfaces two different
+        # ways depending on which layer rejects it: an HTTP-level 401/403
+        # (raise_for_status()), or a 200 OK with a JSON body carrying the
+        # platform's own "认证失败" / code 401 (caught by fetch_export()'s
+        # content-type check, which raises a RuntimeError since the
+        # response isn't the expected spreadsheet). Only those two shapes
+        # actually indicate the token needs replacing.
+        is_auth_failure = (
+            (isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code in (401, 403))
+            or "认证失败" in str(e)
+            or '"code":401' in str(e) or "'code': 401" in str(e) or "'code': '401'" in str(e)
+        )
+        if is_auth_failure:
+            put_token_status(s3, bucket, ok=False, message="update new bearer token to run the pipeline")
+            print(f"FATAL: business API auth failure, marking token as invalid: {e}", file=sys.stderr)
+        else:
+            print(f"FATAL: business API fetch failed (not an auth issue -- token left as-is, will retry next scheduled run): {e}", file=sys.stderr)
         sys.exit(1)
 
     # Ingest everything in one pass (handles purge + re-upload to R2 internally)
