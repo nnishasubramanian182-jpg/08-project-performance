@@ -183,6 +183,52 @@ document.getElementById('addAgentsBtn').addEventListener('click', async () => {
 
 <hr style="margin:40px 0;border:none;border-top:1px solid #eee;">
 
+<h1>Remove Agent</h1>
+<p>Takes a name back out of the standing roster -- for an agent added here who was never actually assigned any users. An agent who still has users assigned to them keeps showing up in Agent Logins regardless (reassign their users first via Reassign Agent if the goal is to fully retire someone still active). One name per line.</p>
+<textarea id="removeAgentsInput" placeholder="Vaani&#10;Atif" style="width:100%;min-height:70px;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit;"></textarea>
+<button id="removeAgentsBtn" style="margin-top:10px;background:#dc2626;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Remove Agent(s)</button>
+<div id="removeAgentsMsg" style="margin-top:10px;font-size:14px;"></div>
+
+<script>
+document.getElementById('removeAgentsBtn').addEventListener('click', async () => {
+  const input = document.getElementById('removeAgentsInput');
+  const btn = document.getElementById('removeAgentsBtn');
+  const msg = document.getElementById('removeAgentsMsg');
+  const names = input.value.split('\\n').map(s => s.trim()).filter(Boolean);
+  if (!names.length) {
+    msg.textContent = 'Enter at least one agent name first.';
+    msg.className = 'err';
+    return;
+  }
+  const password = await askPassword('Enter password to remove ' + names.length + ' agent(s):');
+  if (password === null) return;
+  btn.disabled = true;
+  msg.textContent = 'Removing...';
+  msg.className = '';
+  try {
+    const res = await fetch('/remove-agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agents: names, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    const parts = [];
+    if (data.removed.length) parts.push('Removed: ' + data.removed.join(', '));
+    if (data.notInRoster.length) parts.push('not in roster (no-op): ' + data.notInRoster.join(', '));
+    msg.textContent = (parts.join(' -- ') || 'Nothing to remove') + '. Pipeline restarting.';
+    msg.className = 'ok';
+    input.value = '';
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'err';
+  }
+  btn.disabled = false;
+});
+</script>
+
+<hr style="margin:40px 0;border:none;border-top:1px solid #eee;">
+
 <h1>Agent Logins</h1>
 <p>Every agent currently in the agent list, with their dashboard login password (first 2 letters of their name + "0987", bumped to 3 letters for any agent whose 2-letter prefix collides with another -- or a custom password, if you've changed one). Computed fresh from the current list every time -- a newly added agent shows up here automatically, nothing to separately create. Use "Change" to set a custom password for any agent; it replaces their default one.</p>
 <button id="agentLoginsBtn" style="background:#4f46e5;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Show Agent Logins</button>
@@ -616,6 +662,43 @@ export default {
         await env.USERLIST_BUCKET.put("config/agent_roster.json", JSON.stringify({ agents: [...merged] }));
         await dispatchWorkflow(env, "api_pull.yml", {});
         return new Response(JSON.stringify({ ok: true, added: names, total: merged.size }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        return jsonError(err.message || "Unknown error", 500);
+      }
+    }
+
+    // Mirror of /add-agents: drops names from config/agent_roster.json.
+    // Only takes an agent out of the STANDING roster -- agent_list is
+    // still `agent_by_user.values() | roster.agents` (see
+    // build_deposit_report.py), so an agent who still has users actually
+    // assigned to them keeps showing up in Agent Logins regardless, same
+    // as before this endpoint existed. That's intentional: this removes
+    // an onboarded-but-unused agent, not a live one -- reassign their
+    // users elsewhere first (Reassign Agent) if the goal is to fully
+    // retire someone who's still active.
+    if (request.method === "POST" && url.pathname === "/remove-agents") {
+      try {
+        const { agents, password } = await request.json();
+        if (password !== env.ACTION_PASSWORD) {
+          return jsonError("Access Denied", 403);
+        }
+        if (!Array.isArray(agents) || !agents.length) {
+          return jsonError("agents must be a non-empty array of names", 400);
+        }
+        const names = new Set(agents.map((n) => String(n).trim()).filter(Boolean));
+        if (!names.size) {
+          return jsonError("agents must be a non-empty array of names", 400);
+        }
+        let roster = { agents: [] };
+        const rosterObj = await env.USERLIST_BUCKET.get("config/agent_roster.json");
+        if (rosterObj) roster = await rosterObj.json();
+        const remaining = (roster.agents || []).filter((a) => !names.has(a));
+        const removed = (roster.agents || []).filter((a) => names.has(a));
+        await env.USERLIST_BUCKET.put("config/agent_roster.json", JSON.stringify({ agents: remaining }));
+        await dispatchWorkflow(env, "api_pull.yml", {});
+        return new Response(JSON.stringify({ ok: true, removed, notInRoster: [...names].filter((n) => !removed.includes(n)), total: remaining.length }), {
           headers: { "content-type": "application/json" },
         });
       } catch (err) {
